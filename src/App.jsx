@@ -7,7 +7,7 @@ const SEATTLE_NEIGHBORHOODS = [
   'Queen Anne', 'Ravenna', 'University District', 'Wallingford', 'West Seattle', 'Other'
 ];
 
-const IGYApp = () => {
+const App = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
@@ -95,15 +95,63 @@ const IGYApp = () => {
     localStorage.setItem('igy_posted_requests', JSON.stringify(postedRequests));
   }, [postedRequests]);
 
-  // Save helping requests to localStorage (user-specific)
+  // Save helping requests to localStorage (user-specific).
+  // NOTE: userProfile.nickname is intentionally NOT in the dependency array.
+  // If it were, switching users would fire this effect with the OLD user's data
+  // and write it to the NEW user's localStorage key — corrupting their data.
+  // The reload effect below handles refreshing data when the user switches.
   React.useEffect(() => {
     localStorage.setItem(`igy_helping_requests_${userProfile.nickname}`, JSON.stringify(helpingRequests));
-  }, [helpingRequests, userProfile.nickname]);
+  }, [helpingRequests]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Save completed requests to localStorage (user-specific)
+  // Save completed requests to localStorage (user-specific) — same reasoning as above.
   React.useEffect(() => {
     localStorage.setItem(`igy_completed_requests_${userProfile.nickname}`, JSON.stringify(completedRequests));
-  }, [completedRequests, userProfile.nickname]);
+  }, [completedRequests]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reload user-specific data from localStorage whenever the active user changes.
+  // This ensures each user sees their own helpingRequests and completedRequests
+  // rather than the previous user's stale state.
+  React.useEffect(() => {
+    const savedHelping = localStorage.getItem(`igy_helping_requests_${userProfile.nickname}`);
+    setHelpingRequests(savedHelping ? JSON.parse(savedHelping) : []);
+
+    const savedCompleted = localStorage.getItem(`igy_completed_requests_${userProfile.nickname}`);
+    setCompletedRequests(savedCompleted ? JSON.parse(savedCompleted) : []);
+  }, [userProfile.nickname]);
+
+  // Sync state from localStorage changes made by other tabs.
+  // Uses both the storage event (instant) and polling every 2s (reliable fallback).
+  React.useEffect(() => {
+    const syncFromStorage = () => {
+      const helpingKey = `igy_helping_requests_${userProfile.nickname}`;
+      const completedKey = `igy_completed_requests_${userProfile.nickname}`;
+
+      const latestHelping = JSON.parse(localStorage.getItem(helpingKey) || '[]');
+      const latestCompleted = JSON.parse(localStorage.getItem(completedKey) || '[]');
+      const latestPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
+
+      setHelpingRequests(prev => {
+        const prevStr = JSON.stringify(prev);
+        return JSON.stringify(latestHelping) !== prevStr ? latestHelping : prev;
+      });
+      setCompletedRequests(prev => {
+        const prevStr = JSON.stringify(prev);
+        return JSON.stringify(latestCompleted) !== prevStr ? latestCompleted : prev;
+      });
+      setPostedRequests(prev => {
+        const prevStr = JSON.stringify(prev);
+        return JSON.stringify(latestPosted) !== prevStr ? latestPosted : prev;
+      });
+    };
+
+    window.addEventListener('storage', syncFromStorage);
+    const interval = setInterval(syncFromStorage, 2000);
+    return () => {
+      window.removeEventListener('storage', syncFromStorage);
+      clearInterval(interval);
+    };
+  }, [userProfile.nickname]);
 
   // Update request form neighborhood when profile changes or when opening new request form
   React.useEffect(() => {
@@ -224,9 +272,14 @@ const IGYApp = () => {
       // Update selected request for immediate UI feedback
       const updatedRequest = { ...selectedRequest, helperConfirmed: true, helperConfirmedAt: now };
       setSelectedRequest(updatedRequest);
-      
-      // Check if requestor already confirmed
-      if (selectedRequest.requesterConfirmed) {
+
+      // Read freshest state from localStorage in case the requestor already confirmed
+      // in another tab but the poll hasn't updated React state yet
+      const freshPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
+      const freshRequest = freshPosted.find(r => r.id === selectedRequest.id);
+      const requesterAlreadyConfirmed = selectedRequest.requesterConfirmed || freshRequest?.requesterConfirmed;
+
+      if (requesterAlreadyConfirmed) {
         // Both confirmed - move to completed
         moveToCompleted(updatedRequest);
       } else {
@@ -244,19 +297,37 @@ const IGYApp = () => {
       setPostedRequests(updatedRequests);
       
       // Also update in helpingRequests so helper sees the status
-      const updatedHelping = helpingRequests.map(r => 
-        r.id === selectedRequest.id 
+      const updatedHelping = helpingRequests.map(r =>
+        r.id === selectedRequest.id
           ? { ...r, requesterConfirmed: true, requesterConfirmedAt: now }
           : r
       );
       setHelpingRequests(updatedHelping);
-      
+
       // Update selected request for immediate UI feedback
       const updatedRequest = { ...selectedRequest, requesterConfirmed: true, requesterConfirmedAt: now };
       setSelectedRequest(updatedRequest);
-      
-      // Check if helper already confirmed
-      if (selectedRequest.helperConfirmed) {
+
+      // Write requesterConfirmed to the helper's localStorage so they see the action item
+      const helperName = selectedRequest.acceptedBy;
+      if (helperName) {
+        const helperKey = `igy_helping_requests_${helperName}`;
+        const helperRequests = JSON.parse(localStorage.getItem(helperKey) || '[]');
+        localStorage.setItem(helperKey, JSON.stringify(
+          helperRequests.map(r => r.id === selectedRequest.id
+            ? { ...r, requesterConfirmed: true, requesterConfirmedAt: now }
+            : r
+          )
+        ));
+      }
+
+      // Read freshest state from localStorage in case the helper already confirmed
+      // in another tab but the poll hasn't updated React state yet
+      const freshPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
+      const freshRequest = freshPosted.find(r => r.id === selectedRequest.id);
+      const helperAlreadyConfirmed = selectedRequest.helperConfirmed || freshRequest?.helperConfirmed;
+
+      if (helperAlreadyConfirmed) {
         // Both confirmed - move to completed
         moveToCompleted(updatedRequest);
       } else {
@@ -273,19 +344,38 @@ const IGYApp = () => {
       status: 'completed',
       completedAt: new Date().toISOString()
     };
-    
-    // Add to completed requests
+
+    const helperName = request.acceptedBy;
+    const requesterName = request.userName;
+    const otherUser = userProfile.nickname === helperName ? requesterName : helperName;
+
+    // Update React state for this user
     setCompletedRequests([completedRequest, ...completedRequests]);
-    
-    // Remove from active lists
-    setPostedRequests(postedRequests.filter(r => r.id !== request.id));
     setHelpingRequests(helpingRequests.filter(r => r.id !== request.id));
-    
+
+    // Write to igy_posted_requests immediately (before React effects run) so that
+    // the polling in the other tab reads the already-removed request and doesn't
+    // restore it back into active.
+    const updatedPosted = postedRequests.filter(r => r.id !== request.id);
+    setPostedRequests(updatedPosted);
+    localStorage.setItem('igy_posted_requests', JSON.stringify(updatedPosted));
+
+    // Update the other user's localStorage directly so their tab picks it up via polling.
+    if (otherUser) {
+      const otherHelpingKey = `igy_helping_requests_${otherUser}`;
+      const otherHelping = JSON.parse(localStorage.getItem(otherHelpingKey) || '[]');
+      localStorage.setItem(otherHelpingKey, JSON.stringify(otherHelping.filter(r => r.id !== request.id)));
+
+      const otherCompletedKey = `igy_completed_requests_${otherUser}`;
+      const otherCompleted = JSON.parse(localStorage.getItem(otherCompletedKey) || '[]');
+      localStorage.setItem(otherCompletedKey, JSON.stringify([completedRequest, ...otherCompleted]));
+    }
+
     // Show success message
     alert('Request completed! Both parties have confirmed.\n\nIn the full app, you would now rate each other.');
-    
+
     // TODO: Show rating modal
-    
+
     setScreen('main');
     setActiveTab('myActivity');
   };
@@ -457,12 +547,21 @@ const IGYApp = () => {
                       </p>
                     </div>
                   ) : (
-                    <button 
-                      onClick={() => handleMarkComplete(true)}
-                      className="w-full bg-gradient-to-r from-green-400 to-emerald-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all mb-3"
-                    >
-                      Mark as Complete
-                    </button>
+                    <>
+                      {selectedRequest.requesterConfirmed && (
+                        <div className="bg-green-50 rounded-2xl p-4 mb-4 border-2 border-green-200">
+                          <p className="text-sm text-green-900 font-semibold">
+                            {selectedRequest.userName} has marked this as complete. Please confirm once you've provided the help!
+                          </p>
+                        </div>
+                      )}
+                      <button
+                        onClick={() => handleMarkComplete(true)}
+                        className="w-full bg-gradient-to-r from-green-400 to-emerald-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all mb-3"
+                      >
+                        Mark as Complete
+                      </button>
+                    </>
                   )}
 
                   <div className="bg-amber-50 rounded-2xl p-4 mb-4 border-2 border-amber-200">
@@ -509,14 +608,6 @@ const IGYApp = () => {
               ) : selectedRequest.status === 'accepted' && selectedRequest.userName === userProfile.nickname ? (
                 // Your request that's been accepted - show mark complete (FOR REQUESTOR)
                 <div>
-                  {/* DEBUG: Show what flags exist */}
-                  <div className="bg-yellow-50 rounded-xl p-3 mb-3 border border-yellow-200 text-xs">
-                    <p className="font-semibold text-yellow-900 mb-1">DEBUG INFO:</p>
-                    <p className="text-yellow-800">helperConfirmed: {selectedRequest.helperConfirmed ? 'TRUE' : 'FALSE'}</p>
-                    <p className="text-yellow-800">requesterConfirmed: {selectedRequest.requesterConfirmed ? 'TRUE' : 'FALSE'}</p>
-                    <p className="text-yellow-800">acceptedBy: {selectedRequest.acceptedBy}</p>
-                    <p className="text-yellow-800">Request ID: {selectedRequest.id}</p>
-                  </div>
 
                   <div className="bg-green-50 rounded-2xl p-4 mb-4 border-2 border-green-200">
                     <p className="text-sm text-green-900 mb-2">
@@ -1030,11 +1121,11 @@ const IGYApp = () => {
 
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 text-center border-2 border-green-100">
-                  <p className="text-3xl font-bold text-green-700 mb-1">0</p>
+                  <p className="text-3xl font-bold text-green-700 mb-1">{completedRequests.filter(r => r.acceptedBy === userProfile.nickname).length}</p>
                   <p className="text-sm text-green-600 font-medium">Times Given</p>
                 </div>
                 <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-4 text-center border-2 border-blue-100">
-                  <p className="text-3xl font-bold text-blue-700 mb-1">0</p>
+                  <p className="text-3xl font-bold text-blue-700 mb-1">{completedRequests.filter(r => r.userName === userProfile.nickname).length}</p>
                   <p className="text-sm text-blue-600 font-medium">Times Received</p>
                 </div>
               </div>
@@ -1136,13 +1227,13 @@ const IGYApp = () => {
                 
                 {/* Active Requests */}
                 <h4 className="text-sm font-semibold text-slate-600 mb-2">Active</h4>
-                {postedRequests.filter(r => r.userName === userProfile.nickname).length === 0 ? (
+                {postedRequests.filter(r => r.userName === userProfile.nickname && r.status !== 'completed').length === 0 ? (
                   <div className="bg-white rounded-2xl p-6 text-center shadow-sm mb-4">
                     <p className="text-slate-500 text-sm">You haven't posted any requests yet</p>
                   </div>
                 ) : (
                   <div className="space-y-3 mb-6">
-                    {postedRequests.filter(r => r.userName === userProfile.nickname).map(request => (
+                    {postedRequests.filter(r => r.userName === userProfile.nickname && r.status !== 'completed').map(request => (
                       <div 
                         key={request.id} 
                         onClick={() => {
@@ -1230,11 +1321,18 @@ const IGYApp = () => {
                   </div>
                 ) : (
                   <div className="space-y-3 mb-6">
-                    {helpingRequests.filter(r => r.acceptedBy === userProfile.nickname).map(request => (
-                      <div 
-                        key={request.id} 
+                    {helpingRequests.filter(r => r.acceptedBy === userProfile.nickname).map(request => {
+                      // Look up live status from postedRequests (globally synced) so we
+                      // immediately reflect when the requestor confirms, without waiting
+                      // for helpingRequests to be updated from the other tab.
+                      const liveData = postedRequests.find(r => r.id === request.id) || request;
+                      const requesterConfirmed = liveData.requesterConfirmed || request.requesterConfirmed;
+                      const helperConfirmed = liveData.helperConfirmed || request.helperConfirmed;
+                      return (
+                      <div
+                        key={request.id}
                         onClick={() => {
-                          setSelectedRequest(request);
+                          setSelectedRequest({ ...request, ...liveData });
                           setHasReachedOut(false);
                           setScreen('requestDetail');
                         }}
@@ -1242,12 +1340,26 @@ const IGYApp = () => {
                       >
                         <div className="flex items-start justify-between mb-3">
                           <h4 className="font-bold text-slate-800 text-lg flex-1">{request.title}</h4>
-                          <span className="text-xs font-semibold text-green-600 bg-green-50 px-3 py-1 rounded-full flex-shrink-0 ml-2">
-                            ● Accepted
-                          </span>
+                          {requesterConfirmed && !helperConfirmed ? (
+                            <span className="text-xs font-semibold text-orange-600 bg-orange-50 px-3 py-1 rounded-full flex-shrink-0 ml-2 animate-pulse">
+                              ● Action Required
+                            </span>
+                          ) : (
+                            <span className="text-xs font-semibold text-green-600 bg-green-50 px-3 py-1 rounded-full flex-shrink-0 ml-2">
+                              ● Accepted
+                            </span>
+                          )}
                         </div>
                         <p className="text-slate-600 text-sm mb-3">{request.description}</p>
-                        
+
+                        {/* Action item: requestor has confirmed, helper needs to confirm */}
+                        {requesterConfirmed && !helperConfirmed && (
+                          <div className="bg-orange-50 rounded-xl p-3 mb-3 border-2 border-orange-300">
+                            <p className="text-xs font-bold text-orange-900 mb-1">⚡ {request.userName} has marked this complete!</p>
+                            <p className="text-xs text-orange-800">Tap to open and confirm you've provided the help.</p>
+                          </div>
+                        )}
+
                         {/* Status indicator for confirmation */}
                         {request.helperConfirmed && (
                           <div className="bg-blue-50 rounded-xl p-3 mb-3 border border-blue-200">
@@ -1280,14 +1392,15 @@ const IGYApp = () => {
                           </span>
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
-                            {request.isDateRange 
+                            {request.isDateRange
                               ? `${new Date(request.dateNeeded).toLocaleDateString()} - ${new Date(request.endDate).toLocaleDateString()}`
                               : new Date(request.dateNeeded).toLocaleDateString()}
                             {request.time && ` at ${request.time}`}
                           </span>
                         </div>
                       </div>
-                    ))}
+                    );
+                    })}
                   </div>
                 )}
 
@@ -1321,7 +1434,7 @@ const IGYApp = () => {
 
           {activeTab === 'community' && (
             <>
-              {postedRequests.length === 0 ? (
+              {postedRequests.filter(r => r.status !== 'accepted' && r.userName !== userProfile.nickname).length === 0 ? (
                 <div className="bg-white rounded-2xl p-8 text-center shadow-sm">
                   <Users className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                   <p className="text-slate-500">No open requests right now</p>
@@ -1329,7 +1442,7 @@ const IGYApp = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {postedRequests.filter(r => r.status !== 'accepted').map(request => (
+                  {postedRequests.filter(r => r.status !== 'accepted' && r.userName !== userProfile.nickname).map(request => (
                     <div 
                       key={request.id} 
                       onClick={() => {
@@ -1372,11 +1485,11 @@ const IGYApp = () => {
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-green-700">Times Given</p>
-                <p className="text-2xl font-bold text-green-900">0</p>
+                <p className="text-2xl font-bold text-green-900">{completedRequests.filter(r => r.acceptedBy === userProfile.nickname).length}</p>
               </div>
               <div>
                 <p className="text-green-700">Times Received</p>
-                <p className="text-2xl font-bold text-green-900">0</p>
+                <p className="text-2xl font-bold text-green-900">{completedRequests.filter(r => r.userName === userProfile.nickname).length}</p>
               </div>
             </div>
           </div>
@@ -1507,4 +1620,4 @@ const IGYApp = () => {
   );
 };
 
-export default IGYApp;
+export default App;
