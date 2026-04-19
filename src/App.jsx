@@ -49,12 +49,14 @@ const App = () => {
   // Store posted requests
   const [postedRequests, setPostedRequests] = useState(() => {
     const saved = localStorage.getItem('igy_posted_requests');
-    const savedRequests = saved ? JSON.parse(saved) : [];
-    
-    // Always include Jane Smith's test request if it doesn't exist
-    const hasJaneRequest = savedRequests.some(r => r.id === 1000);
-    if (!hasJaneRequest) {
-      return [{
+    let requests = saved ? JSON.parse(saved) : [];
+
+    // Seed requests for Jane Smith (add any that are missing and not completed)
+    const allCompletedKeys = Object.keys(localStorage).filter(k => k.startsWith('igy_completed_requests_'));
+    const allCompleted = allCompletedKeys.flatMap(key => JSON.parse(localStorage.getItem(key) || '[]'));
+
+    const janeSeeds = [
+      {
         id: 1000,
         title: 'Need ride to doctor appointment',
         description: 'I have a doctor appointment at Swedish Medical Center and need a ride there and back. Appointment is at 2:00 PM. Should take about 2 hours total.',
@@ -70,9 +72,93 @@ const App = () => {
         userPhone: '206-555-0199',
         status: 'open',
         postedAt: new Date().toISOString()
-      }, ...savedRequests];
+      },
+      {
+        id: 1001,
+        title: 'Help moving a bookshelf',
+        description: 'Need someone to help me move a heavy bookshelf from the living room to the bedroom.',
+        neighborhood: 'Capitol Hill',
+        urgency: 'low',
+        dateNeeded: '2026-04-20',
+        isDateRange: false,
+        endDate: '',
+        time: '10:00',
+        userName: 'Jane Smith',
+        userInitial: 'J',
+        status: 'open',
+        postedAt: new Date().toISOString()
+      },
+      {
+        id: 1002,
+        title: 'Cat sitting this weekend',
+        description: 'Going out of town and need someone to check on my cat Saturday and Sunday.',
+        neighborhood: 'Capitol Hill',
+        urgency: 'medium',
+        dateNeeded: '2026-04-25',
+        isDateRange: true,
+        endDate: '2026-04-26',
+        time: '09:00',
+        userName: 'Jane Smith',
+        userInitial: 'J',
+        status: 'open',
+        postedAt: new Date().toISOString()
+      },
+      {
+        id: 1003,
+        title: 'Grocery pickup from PCC',
+        description: 'Recovering from a cold — could someone grab a few items from PCC for me?',
+        neighborhood: 'Capitol Hill',
+        urgency: 'medium',
+        dateNeeded: '2026-04-22',
+        isDateRange: false,
+        endDate: '',
+        time: '15:00',
+        userName: 'Jane Smith',
+        userInitial: 'J',
+        status: 'open',
+        postedAt: new Date().toISOString()
+      },
+      {
+        id: 1004,
+        title: 'Help assembling IKEA shelf',
+        description: 'Just got a new IKEA shelf and could use an extra pair of hands putting it together.',
+        neighborhood: 'Capitol Hill',
+        urgency: 'low',
+        dateNeeded: '2026-04-27',
+        isDateRange: false,
+        endDate: '',
+        time: '11:00',
+        userName: 'Jane Smith',
+        userInitial: 'J',
+        status: 'open',
+        postedAt: new Date().toISOString()
+      },
+      {
+        id: 1005,
+        title: 'Dog walking while I\u2019m at work',
+        description: 'Need someone to walk my dog around noon — he needs about 30 minutes.',
+        neighborhood: 'Capitol Hill',
+        urgency: 'high',
+        dateNeeded: '2026-04-21',
+        isDateRange: false,
+        endDate: '',
+        time: '12:00',
+        userName: 'Jane Smith',
+        userInitial: 'J',
+        status: 'open',
+        postedAt: new Date().toISOString()
+      }
+    ];
+
+    for (const seed of janeSeeds) {
+      const alreadyPosted = requests.some(r => r.id === seed.id);
+      const alreadyCompleted = allCompleted.some(r => r.id === seed.id);
+      if (!alreadyPosted && !alreadyCompleted) {
+        requests = [seed, ...requests];
+      }
     }
-    return savedRequests;
+
+    return requests;
   });
   
   // Store requests user is helping with (user-specific)
@@ -89,11 +175,27 @@ const App = () => {
   
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showAcceptConfirmation, setShowAcceptConfirmation] = useState(false);
+  const [showRequestLimitModal, setShowRequestLimitModal] = useState(false);
+  const [giveFormFromLimit, setGiveFormFromLimit] = useState(false);
+  const [overrideUsed, setOverrideUsed] = useState(() => {
+    return localStorage.getItem(`igy_override_used_${userProfile.nickname}`) === 'true';
+  });
+
+  // Community Gives - positive posts that also count as "gives"
+  const [communityGives, setCommunityGives] = useState(() => {
+    const saved = localStorage.getItem('igy_community_gives');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [giveForm, setGiveForm] = useState({ title: '', content: '', imageUrl: '' });
 
   // Save requests to localStorage whenever they change
   React.useEffect(() => {
     localStorage.setItem('igy_posted_requests', JSON.stringify(postedRequests));
   }, [postedRequests]);
+
+  React.useEffect(() => {
+    localStorage.setItem('igy_community_gives', JSON.stringify(communityGives));
+  }, [communityGives]);
 
   // Save helping requests to localStorage (user-specific).
   // NOTE: userProfile.nickname is intentionally NOT in the dependency array.
@@ -108,6 +210,11 @@ const App = () => {
   React.useEffect(() => {
     localStorage.setItem(`igy_completed_requests_${userProfile.nickname}`, JSON.stringify(completedRequests));
   }, [completedRequests]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reload override flag when user switches
+  React.useEffect(() => {
+    setOverrideUsed(localStorage.getItem(`igy_override_used_${userProfile.nickname}`) === 'true');
+  }, [userProfile.nickname]);
 
   // Reload user-specific data from localStorage whenever the active user changes.
   // This ensures each user sees their own helpingRequests and completedRequests
@@ -153,6 +260,15 @@ const App = () => {
     };
   }, [userProfile.nickname]);
 
+  // Scroll to top whenever navigating to a new screen, switching tabs, or logging in
+  React.useEffect(() => {
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    });
+  }, [screen, activeTab, loggedIn]);
+
   // Update request form neighborhood when profile changes or when opening new request form
   React.useEffect(() => {
     if (screen === 'newRequest') {
@@ -172,17 +288,65 @@ const App = () => {
     alert('Profile updated successfully!');
   };
 
+  // Reciprocity limit logic
+  const myRequestCount = postedRequests.filter(r => r.userName === userProfile.nickname).length
+    + completedRequests.filter(r => r.userName === userProfile.nickname).length;
+  // Helping someone with a request counts as a full give (unlocks 3 requests).
+  // Community gives (recipes, memes, etc.) each unlock 1 additional request.
+  const myHelpGiveCount = completedRequests.filter(r => r.acceptedBy === userProfile.nickname).length;
+  const myCommunityGiveCount = communityGives.filter(g => g.userName === userProfile.nickname).length;
+  const myGiveCount = myHelpGiveCount + myCommunityGiveCount;
+  const requestsAllowed = (myHelpGiveCount + 1) * 3 + myCommunityGiveCount;
+  const isAtRequestLimit = myRequestCount >= requestsAllowed;
+
+  const handleNewRequestClick = () => {
+    if (isAtRequestLimit) {
+      setShowRequestLimitModal(true);
+      return;
+    }
+    setScreen('newRequest');
+  };
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const hasGivenToday = communityGives.some(
+    g => g.userName === userProfile.nickname && g.postedAt.slice(0, 10) === todayStr
+  );
+
+  const handleCreateGive = () => {
+    if (!giveForm.title || !giveForm.content) {
+      alert('Please add a title and something to share');
+      return;
+    }
+    if (hasGivenToday) {
+      alert('You can only share one positivity post per day. Come back tomorrow!');
+      return;
+    }
+    const newGive = {
+      id: Date.now(),
+      title: giveForm.title,
+      content: giveForm.content,
+      imageUrl: giveForm.imageUrl,
+      userName: userProfile.nickname,
+      userInitial: userProfile.nickname[0].toUpperCase(),
+      postedAt: new Date().toISOString()
+    };
+    setCommunityGives([newGive, ...communityGives]);
+    setGiveForm({ title: '', content: '', imageUrl: '' });
+    setScreen('main');
+    setActiveTab('community');
+  };
+
   const handleCreateRequest = () => {
     if (!requestForm.title || !requestForm.description || !requestForm.dateNeeded) {
       alert('Please fill in all required fields');
       return;
     }
-    
+
     if (requestForm.isDateRange && !requestForm.endDate) {
       alert('Please provide an end date for the date range');
       return;
     }
-    
+
     // Create new request
     const newRequest = {
       id: Date.now(),
@@ -766,6 +930,76 @@ const App = () => {
             </div>
           )}
 
+          {/* Request Limit Modal */}
+          {showRequestLimitModal && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-3xl p-6 max-w-md w-full">
+                <div className="text-center mb-5">
+                  <div className="text-5xl mb-3">🤝</div>
+                  <h2 className="text-2xl font-bold text-slate-800 mb-2" style={{ fontFamily: 'Georgia, serif' }}>
+                    Request Limit Reached
+                  </h2>
+                  <p className="text-slate-600 text-sm">
+                    You've reached the maximum number of requests you can make right now. You need to give back to the community before posting again.
+                  </p>
+                </div>
+                <div className="space-y-3">
+                  {/* Contribute option */}
+                  <div className="border-2 border-green-200 rounded-2xl p-4 hover:border-green-400 transition-all">
+                    <button
+                      onClick={() => {
+                        setShowRequestLimitModal(false);
+                        setGiveFormFromLimit(true);
+                        setScreen('giveForm');
+                      }}
+                      className="w-full text-left"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">🌟</span>
+                        <span className="font-bold text-slate-800 text-base">Contribute</span>
+                      </div>
+                      <p className="text-slate-500 text-sm">
+                        Share a recipe, a meme, a joke, or something happy to the community feed. This counts as a give and unlocks your next request!
+                      </p>
+                    </button>
+                  </div>
+
+                  {/* Override option */}
+                  <div className={`border-2 rounded-2xl p-4 transition-all ${overrideUsed ? 'border-slate-100 opacity-50' : 'border-orange-200 hover:border-orange-400'}`}>
+                    <button
+                      onClick={() => {
+                        if (overrideUsed) return;
+                        localStorage.setItem(`igy_override_used_${userProfile.nickname}`, 'true');
+                        setOverrideUsed(true);
+                        setShowRequestLimitModal(false);
+                        setScreen('newRequest');
+                      }}
+                      disabled={overrideUsed}
+                      className="w-full text-left"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">⚡</span>
+                        <span className="font-bold text-slate-800 text-base">Override</span>
+                      </div>
+                      <p className="text-slate-500 text-sm">
+                        {overrideUsed
+                          ? 'You have already used your one-time override.'
+                          : 'This is very urgent and I need to post now. Warning: you can only use this override once — ever.'}
+                      </p>
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setShowRequestLimitModal(false)}
+                    className="w-full text-slate-400 py-2 text-sm hover:text-slate-600 transition-all"
+                  >
+                    Go back
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Cancel Confirmation Modal */}
           {showCancelConfirmation && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -807,6 +1041,111 @@ const App = () => {
               </div>
             </div>
           )}
+        </div>
+      );
+    }
+
+    if (screen === 'giveForm') {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
+          <Header showBackButton={true} onBack={() => setScreen('main')} />
+          <div className="max-w-2xl mx-auto px-4 py-6">
+            <div className="bg-white rounded-3xl shadow-xl p-6">
+              <div className="text-center mb-6">
+                <div className="text-4xl mb-2">🌟</div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: 'Georgia, serif' }}>Share Something Positive</h2>
+                <p className="text-slate-500 text-sm">A little light goes a long way. Share a joke, a meme link, a kind word — anything that might brighten someone's day.</p>
+              </div>
+
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Title *</label>
+                  <input
+                    type="text"
+                    value={giveForm.title}
+                    onChange={(e) => setGiveForm({ ...giveForm, title: e.target.value })}
+                    className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                    placeholder="e.g., A joke to start your day"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Your message *</label>
+                  <textarea
+                    value={giveForm.content}
+                    onChange={(e) => setGiveForm({ ...giveForm, content: e.target.value })}
+                    className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors h-32 resize-none"
+                    placeholder="Share a joke, an uplifting quote, a funny story..."
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Add an image (optional)</label>
+                  <div className="relative">
+                    {giveForm.imageUrl ? (
+                      <div className="relative">
+                        <img
+                          src={giveForm.imageUrl}
+                          alt="Preview"
+                          className="w-full max-h-48 object-cover rounded-xl border-2 border-slate-200"
+                        />
+                        <button
+                          onClick={() => setGiveForm({ ...giveForm, imageUrl: '' })}
+                          className="absolute top-2 right-2 bg-white bg-opacity-90 text-slate-600 w-8 h-8 rounded-full flex items-center justify-center shadow hover:bg-red-50 hover:text-red-500 transition-all text-lg font-bold"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-rose-400 hover:bg-rose-50 transition-all">
+                        <div className="text-3xl mb-1">📷</div>
+                        <p className="text-sm text-slate-500">Tap to upload a photo</p>
+                        <p className="text-xs text-slate-400 mt-1">JPEG, PNG, GIF supported</p>
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/gif,image/webp"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files[0];
+                            if (!file) return;
+                            if (file.size > 5 * 1024 * 1024) {
+                              alert('Image must be under 5MB');
+                              return;
+                            }
+                            const reader = new FileReader();
+                            reader.onload = (ev) => {
+                              setGiveForm({ ...giveForm, imageUrl: ev.target.result });
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => { setGiveFormFromLimit(false); setScreen('main'); }}
+                    className="flex-1 bg-slate-100 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  {hasGivenToday && (
+                    <p className="text-amber-600 text-sm text-center w-full mb-2">You've already shared a positivity post today. Come back tomorrow!</p>
+                  )}
+                  <button
+                    onClick={handleCreateGive}
+                    disabled={hasGivenToday}
+                    className={`flex-1 py-3 rounded-xl font-semibold transition-all ${hasGivenToday ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-gradient-to-r from-green-400 to-emerald-500 text-white hover:shadow-lg'}`}
+                  >
+                    Share with Community
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          </div>
         </div>
       );
     }
@@ -1121,7 +1460,7 @@ const App = () => {
 
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 text-center border-2 border-green-100">
-                  <p className="text-3xl font-bold text-green-700 mb-1">{completedRequests.filter(r => r.acceptedBy === userProfile.nickname).length}</p>
+                  <p className="text-3xl font-bold text-green-700 mb-1">{myGiveCount}</p>
                   <p className="text-sm text-green-600 font-medium">Times Given</p>
                 </div>
                 <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-4 text-center border-2 border-blue-100">
@@ -1133,9 +1472,16 @@ const App = () => {
               <div className="bg-slate-50 rounded-2xl p-4 mb-6">
                 <p className="text-sm font-semibold text-slate-700 mb-2">Reciprocity Status</p>
                 <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
-                  <div className="bg-gradient-to-r from-rose-400 to-orange-400 h-3 rounded-full" style={{ width: '100%' }}></div>
+                  <div
+                    className={`h-3 rounded-full ${isAtRequestLimit ? 'bg-red-400' : 'bg-gradient-to-r from-rose-400 to-orange-400'}`}
+                    style={{ width: `${Math.min(100, (myRequestCount / requestsAllowed) * 100)}%` }}
+                  ></div>
                 </div>
-                <p className="text-xs text-slate-600">✓ You're all set to post requests!</p>
+                <p className="text-xs text-slate-600">
+                  {isAtRequestLimit
+                    ? `⚠️ Limit reached (${myRequestCount}/${requestsAllowed} requests). Share something positive to unlock more.`
+                    : `✓ ${myRequestCount} of ${requestsAllowed} requests used — you're all set!`}
+                </p>
               </div>
 
               <button 
@@ -1198,8 +1544,8 @@ const App = () => {
             <>
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>Open Requests</h3>
-                <button 
-                  onClick={() => setScreen('newRequest')}
+                <button
+                  onClick={handleNewRequestClick}
                   className="bg-gradient-to-r from-rose-400 to-orange-400 text-white px-5 py-2 rounded-full font-semibold hover:shadow-lg transition-all text-sm flex items-center gap-2"
                 >
                   <Send className="w-4 h-4" />
@@ -1216,8 +1562,8 @@ const App = () => {
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>My Requests</h3>
-                  <button 
-                    onClick={() => setScreen('newRequest')}
+                  <button
+                    onClick={handleNewRequestClick}
                     className="bg-gradient-to-r from-rose-400 to-orange-400 text-white px-4 py-2 rounded-full font-semibold hover:shadow-lg transition-all text-sm flex items-center gap-2"
                   >
                     <Send className="w-4 h-4" />
@@ -1479,13 +1825,65 @@ const App = () => {
             </>
           )}
 
+          {/* Community Gives Section */}
+          {activeTab === 'community' && (
+            <div className="mt-8">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>
+                  ✨ Community Gives
+                </h3>
+                <button
+                  onClick={() => setScreen('giveForm')}
+                  className="bg-gradient-to-r from-green-400 to-emerald-500 text-white px-4 py-2 rounded-full font-semibold hover:shadow-lg transition-all text-sm flex items-center gap-1"
+                >
+                  + Share Positivity
+                </button>
+              </div>
+
+              {communityGives.length === 0 ? (
+                <div className="bg-white rounded-2xl p-8 text-center shadow-sm border border-slate-100">
+                  <div className="text-4xl mb-3">🌟</div>
+                  <p className="text-slate-500 text-sm">No community gives yet — be the first to brighten someone's day!</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {communityGives.map(give => (
+                    <div key={give.id} className="bg-white rounded-2xl p-4 shadow-sm border border-green-100">
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-10 h-10 bg-gradient-to-br from-green-400 to-emerald-400 rounded-full flex items-center justify-center flex-shrink-0">
+                          <span className="text-white font-bold text-sm">{give.userInitial}</span>
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-800 text-sm">{give.userName}</p>
+                          <p className="text-xs text-slate-400">{new Date(give.postedAt).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                      {give.imageUrl && (
+                        <div className="mb-2 rounded-xl overflow-hidden border border-slate-100">
+                          <img
+                            src={give.imageUrl}
+                            alt="Community give"
+                            className="w-full max-h-64 object-cover"
+                            onError={(e) => { e.target.style.display = 'none'; }}
+                          />
+                        </div>
+                      )}
+                      <h4 className="font-semibold text-slate-800 mb-1">{give.title}</h4>
+                      <p className="text-slate-600 text-sm whitespace-pre-line mb-2">{give.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Community Stats - shown in both tabs */}
           <div className="mt-6 bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-4 border-2 border-green-200">
             <h4 className="font-semibold text-green-900 mb-2">✨ Your Community Stats</h4>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-green-700">Times Given</p>
-                <p className="text-2xl font-bold text-green-900">{completedRequests.filter(r => r.acceptedBy === userProfile.nickname).length}</p>
+                <p className="text-2xl font-bold text-green-900">{myGiveCount}</p>
               </div>
               <div>
                 <p className="text-green-700">Times Received</p>
@@ -1494,6 +1892,76 @@ const App = () => {
             </div>
           </div>
         </div>
+
+        {/* Request Limit Modal */}
+        {showRequestLimitModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-3xl p-6 max-w-md w-full">
+              <div className="text-center mb-5">
+                <div className="text-5xl mb-3">🤝</div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2" style={{ fontFamily: 'Georgia, serif' }}>
+                  Request Limit Reached
+                </h2>
+                <p className="text-slate-600 text-sm">
+                  You've reached the maximum number of requests you can make right now. You need to give back to the community before posting again.
+                </p>
+              </div>
+              <div className="space-y-3">
+                {/* Contribute option */}
+                <div className="border-2 border-green-200 rounded-2xl p-4 hover:border-green-400 transition-all">
+                  <button
+                    onClick={() => {
+                      setShowRequestLimitModal(false);
+                      setGiveFormFromLimit(true);
+                      setScreen('giveForm');
+                    }}
+                    className="w-full text-left"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-lg">🌟</span>
+                      <span className="font-bold text-slate-800 text-base">Contribute</span>
+                    </div>
+                    <p className="text-slate-500 text-sm">
+                      Share a recipe, a meme, a joke, or something happy to the community feed. This counts as a give and unlocks your next request!
+                    </p>
+                  </button>
+                </div>
+
+                {/* Override option */}
+                <div className={`border-2 rounded-2xl p-4 transition-all ${overrideUsed ? 'border-slate-100 opacity-50' : 'border-orange-200 hover:border-orange-400'}`}>
+                  <button
+                    onClick={() => {
+                      if (overrideUsed) return;
+                      localStorage.setItem(`igy_override_used_${userProfile.nickname}`, 'true');
+                      setOverrideUsed(true);
+                      setShowRequestLimitModal(false);
+                      setScreen('newRequest');
+                    }}
+                    disabled={overrideUsed}
+                    className="w-full text-left"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-lg">⚡</span>
+                      <span className="font-bold text-slate-800 text-base">Override</span>
+                    </div>
+                    <p className="text-slate-500 text-sm">
+                      {overrideUsed
+                        ? 'You have already used your one-time override.'
+                        : 'This is very urgent and I need to post now. Warning: you can only use this override once — ever.'}
+                    </p>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setShowRequestLimitModal(false)}
+                  className="w-full text-slate-400 py-2 text-sm hover:text-slate-600 transition-all"
+                >
+                  Go back
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
