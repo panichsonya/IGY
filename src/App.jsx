@@ -19,7 +19,20 @@ const App = () => {
   const [showAcceptModal, setShowAcceptModal] = useState(false);
   const [hasReachedOut, setHasReachedOut] = useState(false);
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false);
-  
+
+  // Notification state
+  const [notifications, setNotifications] = useState([]);
+
+  // Review system state
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [reviewTarget, setReviewTarget] = useState(null); // { requestId, requestTitle, revieweeName, reviewerName, role }
+  const [reviewStars, setReviewStars] = useState(0);
+  const [reviewTitle, setReviewTitle] = useState('');
+  const [reviewText, setReviewText] = useState('');
+  const [reviewTags, setReviewTags] = useState([]);
+  const [viewingProfile, setViewingProfile] = useState(null); // for read-only other-user profile
+  const [pendingReviews, setPendingReviews] = useState([]); // non-intrusive nudge list
+
   // User profile data
   const [userProfile, setUserProfile] = useState({
     nickname: 'Sonya',
@@ -225,6 +238,23 @@ const App = () => {
 
     const savedCompleted = localStorage.getItem(`igy_completed_requests_${userProfile.nickname}`);
     setCompletedRequests(savedCompleted ? JSON.parse(savedCompleted) : []);
+
+    // Check for pending reviews (show as gentle nudge, not auto-popup)
+    const pendingKey = `igy_pending_reviews_${userProfile.nickname}`;
+    const pending = JSON.parse(localStorage.getItem(pendingKey) || '[]');
+    if (pending.length > 0) {
+      const allReviews = JSON.parse(localStorage.getItem('igy_reviews') || '[]');
+      const stillPending = pending.filter(p => !allReviews.some(r => r.requestId === p.requestId && r.reviewerName === userProfile.nickname));
+      localStorage.setItem(pendingKey, JSON.stringify(stillPending));
+      setPendingReviews(stillPending);
+    } else {
+      setPendingReviews([]);
+    }
+
+    // Load notifications
+    const notifKey = `igy_notifications_${userProfile.nickname}`;
+    const notifs = JSON.parse(localStorage.getItem(notifKey) || '[]');
+    setNotifications(notifs);
   }, [userProfile.nickname]);
 
   // Sync state from localStorage changes made by other tabs.
@@ -249,6 +279,14 @@ const App = () => {
       setPostedRequests(prev => {
         const prevStr = JSON.stringify(prev);
         return JSON.stringify(latestPosted) !== prevStr ? latestPosted : prev;
+      });
+
+      // Sync notifications
+      const notifKey = `igy_notifications_${userProfile.nickname}`;
+      const latestNotifs = JSON.parse(localStorage.getItem(notifKey) || '[]');
+      setNotifications(prev => {
+        const prevStr = JSON.stringify(prev);
+        return JSON.stringify(latestNotifs) !== prevStr ? latestNotifs : prev;
       });
     };
 
@@ -298,6 +336,119 @@ const App = () => {
   const myGiveCount = myHelpGiveCount + myCommunityGiveCount;
   const requestsAllowed = (myHelpGiveCount + 1) * 3 + myCommunityGiveCount;
   const isAtRequestLimit = myRequestCount >= requestsAllowed;
+
+  // Review tag options by role
+  const HELPER_TAGS = ['Reliable', 'Friendly', 'On-time', 'Communicative'];
+  const REQUESTER_TAGS = ['Clear communication', 'Respectful', 'Flexible', 'Grateful'];
+
+  // Review helpers
+  const getAllReviews = () => JSON.parse(localStorage.getItem('igy_reviews') || '[]');
+
+  const getVisibleReviewsFor = (name) => {
+    const all = getAllReviews();
+    const aboutUser = all.filter(r => r.revieweeName === name);
+    return aboutUser.filter(review => {
+      // Blind reveal: both parties must have a record for this requestId
+      const counterpart = all.find(
+        r => r.requestId === review.requestId && r.reviewerName === name
+      );
+      return counterpart && !review.skipped;
+    });
+  };
+
+  const getAggregateRating = (name) => {
+    const visible = getVisibleReviewsFor(name);
+    if (visible.length === 0) return { average: 0, count: 0 };
+    const sum = visible.reduce((acc, r) => acc + r.stars, 0);
+    return { average: Math.round((sum / visible.length) * 10) / 10, count: visible.length };
+  };
+
+  const resetReviewForm = () => {
+    setReviewStars(0);
+    setReviewTitle('');
+    setReviewText('');
+    setReviewTags([]);
+  };
+
+  const handleSubmitReview = () => {
+    if (!reviewTarget || reviewStars === 0 || !reviewTitle.trim()) return;
+    const reviews = getAllReviews();
+    reviews.push({
+      id: Date.now(),
+      requestId: reviewTarget.requestId,
+      requestTitle: reviewTarget.requestTitle,
+      reviewerName: reviewTarget.reviewerName,
+      revieweeName: reviewTarget.revieweeName,
+      role: reviewTarget.role,
+      stars: reviewStars,
+      title: reviewTitle.trim(),
+      text: reviewText.trim(),
+      tags: reviewTags,
+      skipped: false,
+      createdAt: new Date().toISOString()
+    });
+    localStorage.setItem('igy_reviews', JSON.stringify(reviews));
+
+    // Remove from pending
+    const pendingKey = `igy_pending_reviews_${userProfile.nickname}`;
+    const pending = JSON.parse(localStorage.getItem(pendingKey) || '[]');
+    const updated = pending.filter(p => p.requestId !== reviewTarget.requestId);
+    localStorage.setItem(pendingKey, JSON.stringify(updated));
+    setPendingReviews(updated);
+
+    // Check for more pending reviews
+    if (updated.length > 0) {
+      const next = updated[0];
+      setReviewTarget({ requestId: next.requestId, requestTitle: next.requestTitle, revieweeName: next.otherUserName, reviewerName: userProfile.nickname, role: next.role });
+      resetReviewForm();
+    } else {
+      setShowReviewModal(false);
+      setReviewTarget(null);
+      resetReviewForm();
+      setScreen('main');
+      setActiveTab('myActivity');
+    }
+  };
+
+  const handleSkipReview = () => {
+    if (!reviewTarget) return;
+    const reviews = getAllReviews();
+    reviews.push({
+      id: Date.now(),
+      requestId: reviewTarget.requestId,
+      requestTitle: reviewTarget.requestTitle,
+      reviewerName: reviewTarget.reviewerName,
+      revieweeName: reviewTarget.revieweeName,
+      role: reviewTarget.role,
+      stars: 0,
+      title: '',
+      text: '',
+      tags: [],
+      skipped: true,
+      createdAt: new Date().toISOString()
+    });
+    localStorage.setItem('igy_reviews', JSON.stringify(reviews));
+
+    // Remove from pending
+    const pendingKey = `igy_pending_reviews_${userProfile.nickname}`;
+    const pending = JSON.parse(localStorage.getItem(pendingKey) || '[]');
+    const updated = pending.filter(p => p.requestId !== reviewTarget.requestId);
+    localStorage.setItem(pendingKey, JSON.stringify(updated));
+    setPendingReviews(updated);
+
+    // Check for more pending reviews
+    if (updated.length > 0) {
+      const next = updated[0];
+      setReviewTarget({ requestId: next.requestId, requestTitle: next.requestTitle, revieweeName: next.otherUserName, reviewerName: userProfile.nickname, role: next.role });
+      resetReviewForm();
+    } else {
+      setShowReviewModal(false);
+      setReviewTarget(null);
+      resetReviewForm();
+      setScreen('main');
+      setActiveTab('myActivity');
+    }
+  };
 
   const handleNewRequestClick = () => {
     if (isAtRequestLimit) {
@@ -389,6 +540,22 @@ const App = () => {
     };
     setHelpingRequests([...helpingRequests, acceptedRequest]);
     
+    // Notify the requester that someone accepted
+    const requesterName = selectedRequest.userName;
+    if (requesterName) {
+      const notifKey = `igy_notifications_${requesterName}`;
+      const notifs = JSON.parse(localStorage.getItem(notifKey) || '[]');
+      notifs.push({
+        id: Date.now(),
+        type: 'accepted',
+        message: `${userProfile.nickname} has accepted your request "${selectedRequest.title}"`,
+        requestId: selectedRequest.id,
+        createdAt: new Date().toISOString(),
+        read: false
+      });
+      localStorage.setItem(notifKey, JSON.stringify(notifs));
+    }
+
     // Close accept modal and show confirmation
     setShowAcceptModal(false);
     setShowAcceptConfirmation(true);
@@ -418,30 +585,37 @@ const App = () => {
     
     if (isHelper) {
       // Helper marking as complete
-      const updatedHelping = helpingRequests.map(r => 
-        r.id === selectedRequest.id 
+      const updatedHelping = helpingRequests.map(r =>
+        r.id === selectedRequest.id
           ? { ...r, helperConfirmed: true, helperConfirmedAt: now }
           : r
       );
       setHelpingRequests(updatedHelping);
-      
+
       // Also update in postedRequests so requestor sees the status
-      const updatedPosted = postedRequests.map(r => 
-        r.id === selectedRequest.id 
+      const updatedPosted = postedRequests.map(r =>
+        r.id === selectedRequest.id
           ? { ...r, helperConfirmed: true, helperConfirmedAt: now }
           : r
       );
       setPostedRequests(updatedPosted);
-      
+
+      // Persist helperConfirmed to localStorage immediately so the other tab sees it
+      const freshPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
+      const persistedPosted = freshPosted.map(r =>
+        r.id === selectedRequest.id
+          ? { ...r, helperConfirmed: true, helperConfirmedAt: now }
+          : r
+      );
+      localStorage.setItem('igy_posted_requests', JSON.stringify(persistedPosted));
+
       // Update selected request for immediate UI feedback
-      const updatedRequest = { ...selectedRequest, helperConfirmed: true, helperConfirmedAt: now };
+      const freshRequest = freshPosted.find(r => r.id === selectedRequest.id);
+      const updatedRequest = { ...selectedRequest, ...freshRequest, helperConfirmed: true, helperConfirmedAt: now };
       setSelectedRequest(updatedRequest);
 
-      // Read freshest state from localStorage in case the requestor already confirmed
-      // in another tab but the poll hasn't updated React state yet
-      const freshPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
-      const freshRequest = freshPosted.find(r => r.id === selectedRequest.id);
-      const requesterAlreadyConfirmed = selectedRequest.requesterConfirmed || freshRequest?.requesterConfirmed;
+      // Check if the requestor already confirmed
+      const requesterAlreadyConfirmed = updatedRequest.requesterConfirmed;
 
       if (requesterAlreadyConfirmed) {
         // Both confirmed - move to completed
@@ -453,13 +627,22 @@ const App = () => {
       }
     } else {
       // Requestor marking as complete
-      const updatedRequests = postedRequests.map(r => 
-        r.id === selectedRequest.id 
+      // Persist requesterConfirmed to localStorage immediately so the other tab sees it
+      const freshPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
+      const persistedPosted = freshPosted.map(r =>
+        r.id === selectedRequest.id
+          ? { ...r, requesterConfirmed: true, requesterConfirmedAt: now }
+          : r
+      );
+      localStorage.setItem('igy_posted_requests', JSON.stringify(persistedPosted));
+
+      const updatedRequests = postedRequests.map(r =>
+        r.id === selectedRequest.id
           ? { ...r, requesterConfirmed: true, requesterConfirmedAt: now }
           : r
       );
       setPostedRequests(updatedRequests);
-      
+
       // Also update in helpingRequests so helper sees the status
       const updatedHelping = helpingRequests.map(r =>
         r.id === selectedRequest.id
@@ -469,7 +652,8 @@ const App = () => {
       setHelpingRequests(updatedHelping);
 
       // Update selected request for immediate UI feedback
-      const updatedRequest = { ...selectedRequest, requesterConfirmed: true, requesterConfirmedAt: now };
+      const freshRequest = freshPosted.find(r => r.id === selectedRequest.id);
+      const updatedRequest = { ...selectedRequest, ...freshRequest, requesterConfirmed: true, requesterConfirmedAt: now };
       setSelectedRequest(updatedRequest);
 
       // Write requesterConfirmed to the helper's localStorage so they see the action item
@@ -485,11 +669,8 @@ const App = () => {
         ));
       }
 
-      // Read freshest state from localStorage in case the helper already confirmed
-      // in another tab but the poll hasn't updated React state yet
-      const freshPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
-      const freshRequest = freshPosted.find(r => r.id === selectedRequest.id);
-      const helperAlreadyConfirmed = selectedRequest.helperConfirmed || freshRequest?.helperConfirmed;
+      // Check if the helper already confirmed
+      const helperAlreadyConfirmed = updatedRequest.helperConfirmed;
 
       if (helperAlreadyConfirmed) {
         // Both confirmed - move to completed
@@ -535,13 +716,26 @@ const App = () => {
       localStorage.setItem(otherCompletedKey, JSON.stringify([completedRequest, ...otherCompleted]));
     }
 
-    // Show success message
-    alert('Request completed! Both parties have confirmed.\n\nIn the full app, you would now rate each other.');
+    // Create pending reviews for both users
+    const myRole = userProfile.nickname === helperName ? 'helper' : 'requester';
+    const pendingEntry = { requestId: request.id, requestTitle: request.title, otherUserName: otherUser, role: myRole };
+    const myPendingKey = `igy_pending_reviews_${userProfile.nickname}`;
+    const myPending = JSON.parse(localStorage.getItem(myPendingKey) || '[]');
+    myPending.push(pendingEntry);
+    localStorage.setItem(myPendingKey, JSON.stringify(myPending));
 
-    // TODO: Show rating modal
+    if (otherUser) {
+      const otherRole = myRole === 'helper' ? 'requester' : 'helper';
+      const otherPendingKey = `igy_pending_reviews_${otherUser}`;
+      const otherPending = JSON.parse(localStorage.getItem(otherPendingKey) || '[]');
+      otherPending.push({ requestId: request.id, requestTitle: request.title, otherUserName: userProfile.nickname, role: otherRole });
+      localStorage.setItem(otherPendingKey, JSON.stringify(otherPending));
+    }
 
-    setScreen('main');
-    setActiveTab('myActivity');
+    // Show review modal
+    setReviewTarget({ requestId: request.id, requestTitle: request.title, revieweeName: otherUser, reviewerName: userProfile.nickname, role: myRole });
+    resetReviewForm();
+    setShowReviewModal(true);
   };
 
   // Reusable Header Component
@@ -579,7 +773,7 @@ const App = () => {
               <p className="text-sm font-semibold text-slate-800">{userProfile.nickname}</p>
               <div className="flex items-center gap-1 text-xs text-amber-600 justify-end">
                 <Star className="w-3 h-3 fill-amber-400" />
-                <span>4.8</span>
+                <span>{getAggregateRating(userProfile.nickname).count > 0 ? getAggregateRating(userProfile.nickname).average : 'New'}</span>
               </div>
             </div>
             <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-700 font-semibold hover:bg-slate-200 transition-colors">
@@ -647,11 +841,25 @@ const App = () => {
                   <span className="text-white font-bold text-2xl">{selectedRequest.userInitial}</span>
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>{selectedRequest.userName}</h2>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
-                    <span className="text-sm text-slate-600">4.5 (8 ratings)</span>
-                  </div>
+                  <h2
+                    className="text-xl font-bold text-slate-800 cursor-pointer hover:underline decoration-dotted"
+                    style={{ fontFamily: 'Georgia, serif' }}
+                    onClick={() => {
+                      setViewingProfile({ nickname: selectedRequest.userName, initial: selectedRequest.userInitial, neighborhood: selectedRequest.neighborhood });
+                      setScreen('viewProfile');
+                    }}
+                  >{selectedRequest.userName}</h2>
+                  {(() => {
+                    const rating = getAggregateRating(selectedRequest.userName);
+                    return rating.count > 0 ? (
+                      <div className="flex items-center gap-2 mt-1">
+                        <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
+                        <span className="text-sm text-slate-600">{rating.average} ({rating.count} {rating.count === 1 ? 'review' : 'reviews'})</span>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-400 mt-1">No reviews yet</p>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -1429,6 +1637,79 @@ const App = () => {
       );
     }
 
+    if (screen === 'viewProfile' && viewingProfile) {
+      const vpRating = getAggregateRating(viewingProfile.nickname);
+      const vpReviews = getVisibleReviewsFor(viewingProfile.nickname);
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
+          <Header showBackButton={true} onBack={() => setScreen('main')} />
+
+          <div className="max-w-2xl mx-auto px-4 py-6">
+            <div className="bg-white rounded-3xl shadow-xl p-6 mb-4">
+              <div className="text-center mb-6">
+                <div className="w-24 h-24 bg-gradient-to-br from-rose-400 to-orange-400 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-4xl text-white font-bold">{viewingProfile.nickname[0].toUpperCase()}</span>
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: 'Georgia, serif' }}>{viewingProfile.nickname}</h2>
+                {viewingProfile.neighborhood && (
+                  <div className="flex items-center justify-center gap-2 mt-2">
+                    <MapPin className="w-4 h-4 text-slate-500" />
+                    <span className="text-slate-600">{viewingProfile.neighborhood}</span>
+                  </div>
+                )}
+
+                {vpRating.count > 0 ? (
+                  <div className="flex items-center justify-center gap-2 mt-3">
+                    <Star className="w-5 h-5 fill-amber-400 text-amber-400" />
+                    <span className="text-lg font-semibold text-slate-800">{vpRating.average}</span>
+                    <span className="text-slate-500 text-sm">({vpRating.count} {vpRating.count === 1 ? 'review' : 'reviews'})</span>
+                  </div>
+                ) : (
+                  <p className="text-slate-400 text-sm mt-3">No reviews yet</p>
+                )}
+              </div>
+            </div>
+
+            {/* Reviews Section */}
+            <div className="bg-white rounded-3xl shadow-xl p-6">
+              <h3 className="font-bold text-slate-800 text-lg mb-4" style={{ fontFamily: 'Georgia, serif' }}>Reviews</h3>
+              {vpReviews.length === 0 ? (
+                <div className="text-center py-6">
+                  <Star className="w-10 h-10 text-slate-200 mx-auto mb-2" />
+                  <p className="text-slate-400 text-sm">No reviews yet</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-96 overflow-y-auto">
+                  {vpReviews.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(review => (
+                    <div key={review.id} className="bg-slate-50 rounded-2xl p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-semibold text-slate-800 text-sm">{review.reviewerName}</span>
+                        <div className="flex items-center gap-1">
+                          {[1, 2, 3, 4, 5].map(s => (
+                            <Star key={s} className={`w-3.5 h-3.5 ${s <= review.stars ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
+                          ))}
+                        </div>
+                      </div>
+                      <p className="font-semibold text-slate-700 text-sm mb-1">{review.title}</p>
+                      {review.text && <p className="text-slate-600 text-sm mb-2">{review.text}</p>}
+                      {review.tags && review.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {review.tags.map(tag => (
+                            <span key={tag} className="px-2 py-0.5 bg-rose-50 text-rose-600 rounded-full text-xs font-medium">{tag}</span>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-slate-400 text-xs">{new Date(review.createdAt).toLocaleDateString()}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     if (screen === 'profile') {
       return (
         <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
@@ -1451,11 +1732,18 @@ const App = () => {
                   <p className="text-slate-600 text-sm mt-3 italic">"{userProfile.bio}"</p>
                 )}
                 
-                <div className="flex items-center justify-center gap-2 mt-3">
-                  <Star className="w-5 h-5 fill-amber-400 text-amber-400" />
-                  <span className="text-lg font-semibold text-slate-800">4.8</span>
-                  <span className="text-slate-500 text-sm">(15 ratings)</span>
-                </div>
+                {(() => {
+                  const rating = getAggregateRating(userProfile.nickname);
+                  return rating.count > 0 ? (
+                    <div className="flex items-center justify-center gap-2 mt-3">
+                      <Star className="w-5 h-5 fill-amber-400 text-amber-400" />
+                      <span className="text-lg font-semibold text-slate-800">{rating.average}</span>
+                      <span className="text-slate-500 text-sm">({rating.count} {rating.count === 1 ? 'review' : 'reviews'})</span>
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 text-sm mt-3">No reviews yet</p>
+                  );
+                })()}
               </div>
 
               <div className="grid grid-cols-2 gap-4 mb-6">
@@ -1505,6 +1793,45 @@ const App = () => {
                 Log Out
               </button>
             </div>
+
+            {/* Reviews Section */}
+            <div className="bg-white rounded-3xl shadow-xl p-6">
+              <h3 className="font-bold text-slate-800 text-lg mb-4" style={{ fontFamily: 'Georgia, serif' }}>Reviews</h3>
+              {(() => {
+                const myReviews = getVisibleReviewsFor(userProfile.nickname);
+                return myReviews.length === 0 ? (
+                  <div className="text-center py-6">
+                    <Star className="w-10 h-10 text-slate-200 mx-auto mb-2" />
+                    <p className="text-slate-400 text-sm">No reviews yet</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-96 overflow-y-auto">
+                    {myReviews.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(review => (
+                      <div key={review.id} className="bg-slate-50 rounded-2xl p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-semibold text-slate-800 text-sm">{review.reviewerName}</span>
+                          <div className="flex items-center gap-1">
+                            {[1, 2, 3, 4, 5].map(s => (
+                              <Star key={s} className={`w-3.5 h-3.5 ${s <= review.stars ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
+                            ))}
+                          </div>
+                        </div>
+                        <p className="font-semibold text-slate-700 text-sm mb-1">{review.title}</p>
+                        {review.text && <p className="text-slate-600 text-sm mb-2">{review.text}</p>}
+                        {review.tags && review.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mb-2">
+                            {review.tags.map(tag => (
+                              <span key={tag} className="px-2 py-0.5 bg-rose-50 text-rose-600 rounded-full text-xs font-medium">{tag}</span>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-slate-400 text-xs">{new Date(review.createdAt).toLocaleDateString()}</p>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </div>
       );
@@ -1515,6 +1842,33 @@ const App = () => {
         <Header />
 
         <div className="max-w-2xl mx-auto px-4 py-6">
+          {/* Notifications */}
+          {notifications.filter(n => !n.read).length > 0 && (
+            <div className="space-y-2 mb-4">
+              {notifications.filter(n => !n.read).map(notif => (
+                <div key={notif.id} className="bg-green-50 rounded-2xl p-4 border-2 border-green-200 flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-green-800">🎉 {notif.message}</p>
+                    <p className="text-xs text-green-600 mt-1">
+                      {new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const notifKey = `igy_notifications_${userProfile.nickname}`;
+                      const updated = notifications.map(n => n.id === notif.id ? { ...n, read: true } : n);
+                      setNotifications(updated);
+                      localStorage.setItem(notifKey, JSON.stringify(updated));
+                    }}
+                    className="text-green-400 hover:text-green-600 text-lg font-bold flex-shrink-0"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Tab Navigation */}
           <div className="flex gap-2 mb-6 bg-white rounded-2xl p-2 shadow-sm">
             <button
@@ -1558,6 +1912,27 @@ const App = () => {
           {/* My Activity Tab */}
           {activeTab === 'myActivity' && (
             <div className="space-y-6">
+              {/* Pending Reviews Nudge */}
+              {pendingReviews.length > 0 && (
+                <div className="bg-amber-50 rounded-2xl p-4 border-2 border-amber-200">
+                  <p className="text-sm font-semibold text-amber-800 mb-2">⭐ You have {pendingReviews.length === 1 ? 'a pending review' : `${pendingReviews.length} pending reviews`}</p>
+                  {pendingReviews.map(p => (
+                    <button
+                      key={p.requestId}
+                      onClick={() => {
+                        setReviewTarget({ requestId: p.requestId, requestTitle: p.requestTitle, revieweeName: p.otherUserName, reviewerName: userProfile.nickname, role: p.role });
+                        resetReviewForm();
+                        setShowReviewModal(true);
+                      }}
+                      className="w-full text-left bg-white rounded-xl p-3 mb-2 last:mb-0 border border-amber-100 hover:shadow-sm transition-all"
+                    >
+                      <p className="text-sm font-medium text-slate-800">Review {p.otherUserName}</p>
+                      <p className="text-xs text-slate-500">For: {p.requestTitle}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* My Requests Section */}
               <div>
                 <div className="flex items-center justify-between mb-4">
@@ -1644,10 +2019,47 @@ const App = () => {
                             ✓ Completed
                           </span>
                         </div>
-                        <p className="text-slate-600 text-sm mb-2">Helped by: <span className="font-semibold">{request.acceptedBy}</span></p>
+                        <p className="text-slate-600 text-sm mb-2">Helped by: <span
+                          className="font-semibold cursor-pointer hover:underline decoration-dotted"
+                          onClick={() => {
+                            setViewingProfile({ nickname: request.acceptedBy, neighborhood: request.neighborhood });
+                            setScreen('viewProfile');
+                          }}
+                        >{request.acceptedBy}</span></p>
                         <p className="text-xs text-slate-400">
                           Completed {new Date(request.completedAt).toLocaleDateString()}
                         </p>
+                        {(() => {
+                          const allRevs = getAllReviews();
+                          const myReview = allRevs.find(r => r.requestId === request.id && r.reviewerName === userProfile.nickname);
+                          const theirReview = allRevs.find(r => r.requestId === request.id && r.reviewerName === request.acceptedBy);
+                          if (!myReview) {
+                            return (
+                              <button
+                                onClick={() => {
+                                  setReviewTarget({ requestId: request.id, requestTitle: request.title, revieweeName: request.acceptedBy, reviewerName: userProfile.nickname, role: 'requester' });
+                                  resetReviewForm();
+                                  setShowReviewModal(true);
+                                }}
+                                className="mt-2 text-xs font-semibold text-rose-500 hover:text-rose-600 transition-colors"
+                              >
+                                ★ Leave a review
+                              </button>
+                            );
+                          } else if (!theirReview) {
+                            return <p className="mt-2 text-xs text-slate-400">✓ Review submitted — waiting for {request.acceptedBy}</p>;
+                          } else if (!myReview.skipped && !theirReview.skipped) {
+                            return (
+                              <div className="flex items-center gap-1 mt-2">
+                                {[1, 2, 3, 4, 5].map(s => (
+                                  <Star key={s} className={`w-3 h-3 ${s <= theirReview.stars ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
+                                ))}
+                                <span className="text-xs text-slate-500 ml-1">from {request.acceptedBy}</span>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     ))}
                   </div>
@@ -1720,7 +2132,14 @@ const App = () => {
                           <p className="text-xs font-semibold text-blue-900 mb-2">Contact Info:</p>
                           <div className="space-y-1 text-sm">
                             <p className="text-blue-800">
-                              <span className="font-semibold">{request.userName}</span>
+                              <span
+                                className="font-semibold cursor-pointer hover:underline decoration-dotted"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setViewingProfile({ nickname: request.userName, initial: request.userInitial, neighborhood: request.neighborhood });
+                                  setScreen('viewProfile');
+                                }}
+                              >{request.userName}</span>
                             </p>
                             {request.userEmail && (
                               <p className="text-blue-700">📧 {request.userEmail}</p>
@@ -1766,10 +2185,47 @@ const App = () => {
                             ✓ Completed
                           </span>
                         </div>
-                        <p className="text-slate-600 text-sm mb-2">Helped: <span className="font-semibold">{request.userName}</span></p>
+                        <p className="text-slate-600 text-sm mb-2">Helped: <span
+                          className="font-semibold cursor-pointer hover:underline decoration-dotted"
+                          onClick={() => {
+                            setViewingProfile({ nickname: request.userName, initial: request.userInitial, neighborhood: request.neighborhood });
+                            setScreen('viewProfile');
+                          }}
+                        >{request.userName}</span></p>
                         <p className="text-xs text-slate-400">
                           Completed {new Date(request.completedAt).toLocaleDateString()}
                         </p>
+                        {(() => {
+                          const allRevs = getAllReviews();
+                          const myReview = allRevs.find(r => r.requestId === request.id && r.reviewerName === userProfile.nickname);
+                          const theirReview = allRevs.find(r => r.requestId === request.id && r.reviewerName === request.userName);
+                          if (!myReview) {
+                            return (
+                              <button
+                                onClick={() => {
+                                  setReviewTarget({ requestId: request.id, requestTitle: request.title, revieweeName: request.userName, reviewerName: userProfile.nickname, role: 'helper' });
+                                  resetReviewForm();
+                                  setShowReviewModal(true);
+                                }}
+                                className="mt-2 text-xs font-semibold text-rose-500 hover:text-rose-600 transition-colors"
+                              >
+                                ★ Leave a review
+                              </button>
+                            );
+                          } else if (!theirReview) {
+                            return <p className="mt-2 text-xs text-slate-400">✓ Review submitted — waiting for {request.userName}</p>;
+                          } else if (!myReview.skipped && !theirReview.skipped) {
+                            return (
+                              <div className="flex items-center gap-1 mt-2">
+                                {[1, 2, 3, 4, 5].map(s => (
+                                  <Star key={s} className={`w-3 h-3 ${s <= theirReview.stars ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
+                                ))}
+                                <span className="text-xs text-slate-500 ml-1">from {request.userName}</span>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     ))}
                   </div>
@@ -1780,7 +2236,7 @@ const App = () => {
 
           {activeTab === 'community' && (
             <>
-              {postedRequests.filter(r => r.status !== 'accepted' && r.userName !== userProfile.nickname).length === 0 ? (
+              {postedRequests.filter(r => r.status !== 'accepted').length === 0 ? (
                 <div className="bg-white rounded-2xl p-8 text-center shadow-sm">
                   <Users className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                   <p className="text-slate-500">No open requests right now</p>
@@ -1788,7 +2244,7 @@ const App = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {postedRequests.filter(r => r.status !== 'accepted' && r.userName !== userProfile.nickname).map(request => (
+                  {postedRequests.filter(r => r.status !== 'accepted').map(request => (
                     <div 
                       key={request.id} 
                       onClick={() => {
@@ -1959,6 +2415,108 @@ const App = () => {
                   Go back
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Review Modal */}
+        {showReviewModal && reviewTarget && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-3xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+              <div className="text-center mb-4">
+                <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-orange-400 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <span className="text-white font-bold text-2xl">{reviewTarget.revieweeName[0].toUpperCase()}</span>
+                </div>
+                <h3 className="text-xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>
+                  How was your experience with {reviewTarget.revieweeName}?
+                </h3>
+                <p className="text-slate-500 text-sm mt-1">For: {reviewTarget.requestTitle}</p>
+              </div>
+
+              {/* Star Rating */}
+              <div className="flex justify-center gap-2 mb-4">
+                {[1, 2, 3, 4, 5].map(star => (
+                  <button
+                    key={star}
+                    onClick={() => setReviewStars(star)}
+                    className="p-1 transition-transform hover:scale-110"
+                  >
+                    <Star
+                      className={`w-8 h-8 ${star <= reviewStars ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
+                    />
+                  </button>
+                ))}
+              </div>
+              {reviewStars > 0 && (
+                <p className="text-center text-sm text-slate-500 mb-4">
+                  {reviewStars === 1 ? 'Poor' : reviewStars === 2 ? 'Fair' : reviewStars === 3 ? 'Good' : reviewStars === 4 ? 'Great' : 'Excellent'}
+                </p>
+              )}
+
+              {/* Review Title */}
+              <input
+                type="text"
+                value={reviewTitle}
+                onChange={(e) => setReviewTitle(e.target.value.slice(0, 50))}
+                placeholder="Review headline (required)"
+                className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors mb-1 text-sm"
+              />
+              <p className="text-xs text-slate-400 text-right mb-3">{reviewTitle.length}/50</p>
+
+              {/* Review Text */}
+              <textarea
+                value={reviewText}
+                onChange={(e) => setReviewText(e.target.value.slice(0, 500))}
+                placeholder="Share your experience (optional)"
+                rows={3}
+                className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors text-sm resize-none mb-1"
+              />
+              <p className="text-xs text-slate-400 text-right mb-3">{reviewText.length}/500</p>
+
+              {/* Tags */}
+              <div className="mb-5">
+                <p className="text-sm font-semibold text-slate-700 mb-2">Tags (optional)</p>
+                <div className="flex flex-wrap gap-2">
+                  {(reviewTarget.role === 'requester' ? HELPER_TAGS : REQUESTER_TAGS).map(tag => (
+                    <button
+                      key={tag}
+                      onClick={() => setReviewTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                        reviewTags.includes(tag)
+                          ? 'bg-gradient-to-r from-rose-400 to-orange-400 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={handleSkipReview}
+                  className="flex-1 bg-slate-100 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-all"
+                >
+                  Skip
+                </button>
+                <button
+                  onClick={handleSubmitReview}
+                  disabled={reviewStars === 0 || !reviewTitle.trim()}
+                  className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
+                    reviewStars > 0 && reviewTitle.trim()
+                      ? 'bg-gradient-to-r from-rose-400 to-orange-400 text-white hover:shadow-lg'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  Submit Review
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-400 text-center mt-3">
+                Reviews are revealed after both parties submit
+              </p>
             </div>
           </div>
         )}
