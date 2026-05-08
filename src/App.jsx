@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Heart, MapPin, Clock, Send, Users, Star, Check, AlertCircle } from 'lucide-react';
-import { auth, googleProvider } from './firebase';
+import { auth, googleProvider, db } from './firebase';
 import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot, getDoc, setDoc, orderBy, serverTimestamp, Timestamp } from 'firebase/firestore';
 
 const SEATTLE_NEIGHBORHOODS = [
   'Ballard', 'Capitol Hill', 'Central District', 'Downtown', 'Fremont',
@@ -68,81 +69,103 @@ const App = () => {
     time: ''
   });
   
-  // Store posted requests
-  const [postedRequests, setPostedRequests] = useState(() => {
-    const saved = localStorage.getItem('igy_posted_requests');
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  // Store requests user is helping with (user-specific)
-  const [helpingRequests, setHelpingRequests] = useState(() => {
-    const saved = localStorage.getItem(`igy_helping_requests_${userProfile.nickname}`);
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  // Store completed requests (user-specific)
-  const [completedRequests, setCompletedRequests] = useState(() => {
-    const saved = localStorage.getItem(`igy_completed_requests_${userProfile.nickname}`);
-    return saved ? JSON.parse(saved) : [];
-  });
-  
+  // All data now lives in Firestore — state is populated by real-time listeners
+  const [postedRequests, setPostedRequests] = useState([]);
+  const [helpingRequests, setHelpingRequests] = useState([]);
+  const [completedRequests, setCompletedRequests] = useState([]);
+
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showAcceptConfirmation, setShowAcceptConfirmation] = useState(false);
   const [showRequestLimitModal, setShowRequestLimitModal] = useState(false);
   const [giveFormFromLimit, setGiveFormFromLimit] = useState(false);
-  const [overrideUsed, setOverrideUsed] = useState(() => {
-    return localStorage.getItem(`igy_override_used_${userProfile.nickname}`) === 'true';
-  });
+  const [overrideUsed, setOverrideUsed] = useState(false);
 
-  // Community Gives - positive posts that also count as "gives"
-  const [communityGives, setCommunityGives] = useState(() => {
-    const saved = localStorage.getItem('igy_community_gives');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Community Gives
+  const [communityGives, setCommunityGives] = useState([]);
   const [giveForm, setGiveForm] = useState({ title: '', content: '', imageUrl: '' });
 
-  // Save requests to localStorage whenever they change
-  React.useEffect(() => {
-    localStorage.setItem('igy_posted_requests', JSON.stringify(postedRequests));
-  }, [postedRequests]);
+  // Reviews (loaded from Firestore)
+  const [allReviews, setAllReviews] = useState([]);
 
-  React.useEffect(() => {
-    localStorage.setItem('igy_community_gives', JSON.stringify(communityGives));
-  }, [communityGives]);
-
-  // Save helping requests to localStorage (user-specific).
-  // NOTE: userProfile.nickname is intentionally NOT in the dependency array.
-  // If it were, switching users would fire this effect with the OLD user's data
-  // and write it to the NEW user's localStorage key — corrupting their data.
-  // The reload effect below handles refreshing data when the user switches.
-  React.useEffect(() => {
-    localStorage.setItem(`igy_helping_requests_${userProfile.nickname}`, JSON.stringify(helpingRequests));
-  }, [helpingRequests]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Save completed requests to localStorage (user-specific) — same reasoning as above.
-  React.useEffect(() => {
-    localStorage.setItem(`igy_completed_requests_${userProfile.nickname}`, JSON.stringify(completedRequests));
-  }, [completedRequests]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Reload override flag when user switches
-  React.useEffect(() => {
-    setOverrideUsed(localStorage.getItem(`igy_override_used_${userProfile.nickname}`) === 'true');
-  }, [userProfile.nickname]);
-
-  // Firebase auth state listener
+  // Firestore real-time listeners — subscribe when user is logged in
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    if (!loggedIn || !userProfile.nickname) return;
+
+    // Listen to all non-completed requests (community feed + my posted + my helping)
+    const requestsQuery = query(collection(db, 'requests'), where('status', 'in', ['open', 'accepted']));
+    const unsubRequests = onSnapshot(requestsQuery, (snapshot) => {
+      const allRequests = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setPostedRequests(allRequests);
+      setHelpingRequests(allRequests.filter(r => r.acceptedBy === userProfile.nickname && r.status === 'accepted'));
+    });
+
+    // Listen to completed requests for this user
+    const completedQuery1 = query(collection(db, 'requests'), where('status', '==', 'completed'), where('userName', '==', userProfile.nickname));
+    const completedQuery2 = query(collection(db, 'requests'), where('status', '==', 'completed'), where('acceptedBy', '==', userProfile.nickname));
+    let completed1 = [], completed2 = [];
+    const mergeCompleted = () => {
+      const merged = [...completed1, ...completed2];
+      const unique = merged.filter((r, i) => merged.findIndex(x => x.id === r.id) === i);
+      setCompletedRequests(unique);
+    };
+    const unsubCompleted1 = onSnapshot(completedQuery1, (snapshot) => {
+      completed1 = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      mergeCompleted();
+    });
+    const unsubCompleted2 = onSnapshot(completedQuery2, (snapshot) => {
+      completed2 = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      mergeCompleted();
+    });
+
+    // Listen to community gives
+    const givesQuery = query(collection(db, 'communityGives'), orderBy('postedAt', 'desc'));
+    const unsubGives = onSnapshot(givesQuery, (snapshot) => {
+      setCommunityGives(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    // Listen to reviews
+    const unsubReviews = onSnapshot(collection(db, 'reviews'), (snapshot) => {
+      setAllReviews(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    // Listen to notifications for this user
+    const notifsQuery = query(collection(db, 'notifications'), where('userId', '==', userProfile.nickname));
+    const unsubNotifs = onSnapshot(notifsQuery, (snapshot) => {
+      setNotifications(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    // Listen to pending reviews for this user
+    const pendingQuery = query(collection(db, 'pendingReviews'), where('userName', '==', userProfile.nickname));
+    const unsubPending = onSnapshot(pendingQuery, (snapshot) => {
+      setPendingReviews(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => {
+      unsubRequests();
+      unsubCompleted1();
+      unsubCompleted2();
+      unsubGives();
+      unsubReviews();
+      unsubNotifs();
+      unsubPending();
+    };
+  }, [loggedIn, userProfile.nickname]);
+
+  // Firebase auth state listener — loads profile from Firestore
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       setAuthLoading(false);
       if (user && !isTestMode) {
-        // User is signed in via Firebase
         const displayName = user.displayName || user.email.split('@')[0];
-        const savedProfile = localStorage.getItem(`igy_profile_${user.uid}`);
-        if (savedProfile) {
-          const profile = JSON.parse(savedProfile);
+        // Check Firestore for existing profile
+        const profileDoc = await getDoc(doc(db, 'profiles', user.uid));
+        if (profileDoc.exists()) {
+          const profile = { ...profileDoc.data(), uid: user.uid };
           setUserProfile(profile);
           setEditForm(profile);
           setUserName(profile.nickname || displayName);
+          if (profile.overrideUsed) setOverrideUsed(true);
         } else {
           // New user — needs profile setup
           const newProfile = {
@@ -169,74 +192,7 @@ const App = () => {
     return () => unsubscribe();
   }, [isTestMode]);
 
-  // Reload user-specific data from localStorage whenever the active user changes.
-  // This ensures each user sees their own helpingRequests and completedRequests
-  // rather than the previous user's stale state.
-  React.useEffect(() => {
-    const savedHelping = localStorage.getItem(`igy_helping_requests_${userProfile.nickname}`);
-    setHelpingRequests(savedHelping ? JSON.parse(savedHelping) : []);
-
-    const savedCompleted = localStorage.getItem(`igy_completed_requests_${userProfile.nickname}`);
-    setCompletedRequests(savedCompleted ? JSON.parse(savedCompleted) : []);
-
-    // Check for pending reviews (show as gentle nudge, not auto-popup)
-    const pendingKey = `igy_pending_reviews_${userProfile.nickname}`;
-    const pending = JSON.parse(localStorage.getItem(pendingKey) || '[]');
-    if (pending.length > 0) {
-      const allReviews = JSON.parse(localStorage.getItem('igy_reviews') || '[]');
-      const stillPending = pending.filter(p => !allReviews.some(r => r.requestId === p.requestId && r.reviewerName === userProfile.nickname));
-      localStorage.setItem(pendingKey, JSON.stringify(stillPending));
-      setPendingReviews(stillPending);
-    } else {
-      setPendingReviews([]);
-    }
-
-    // Load notifications
-    const notifKey = `igy_notifications_${userProfile.nickname}`;
-    const notifs = JSON.parse(localStorage.getItem(notifKey) || '[]');
-    setNotifications(notifs);
-  }, [userProfile.nickname]);
-
-  // Sync state from localStorage changes made by other tabs.
-  // Uses both the storage event (instant) and polling every 2s (reliable fallback).
-  React.useEffect(() => {
-    const syncFromStorage = () => {
-      const helpingKey = `igy_helping_requests_${userProfile.nickname}`;
-      const completedKey = `igy_completed_requests_${userProfile.nickname}`;
-
-      const latestHelping = JSON.parse(localStorage.getItem(helpingKey) || '[]');
-      const latestCompleted = JSON.parse(localStorage.getItem(completedKey) || '[]');
-      const latestPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
-
-      setHelpingRequests(prev => {
-        const prevStr = JSON.stringify(prev);
-        return JSON.stringify(latestHelping) !== prevStr ? latestHelping : prev;
-      });
-      setCompletedRequests(prev => {
-        const prevStr = JSON.stringify(prev);
-        return JSON.stringify(latestCompleted) !== prevStr ? latestCompleted : prev;
-      });
-      setPostedRequests(prev => {
-        const prevStr = JSON.stringify(prev);
-        return JSON.stringify(latestPosted) !== prevStr ? latestPosted : prev;
-      });
-
-      // Sync notifications
-      const notifKey = `igy_notifications_${userProfile.nickname}`;
-      const latestNotifs = JSON.parse(localStorage.getItem(notifKey) || '[]');
-      setNotifications(prev => {
-        const prevStr = JSON.stringify(prev);
-        return JSON.stringify(latestNotifs) !== prevStr ? latestNotifs : prev;
-      });
-    };
-
-    window.addEventListener('storage', syncFromStorage);
-    const interval = setInterval(syncFromStorage, 2000);
-    return () => {
-      window.removeEventListener('storage', syncFromStorage);
-      clearInterval(interval);
-    };
-  }, [userProfile.nickname]);
+  // Firestore real-time listeners replace localStorage polling — no sync code needed
 
   // Scroll to top whenever navigating to a new screen, switching tabs, or logging in
   React.useEffect(() => {
@@ -257,13 +213,12 @@ const App = () => {
     }
   }, [screen, userProfile.neighborhood]);
 
-  const handleSaveProfile = (e) => {
+  const handleSaveProfile = async (e) => {
     if (e) e.preventDefault();
     setUserProfile(editForm);
     setUserName(editForm.nickname);
-    localStorage.setItem('igy_user_profile', JSON.stringify(editForm));
     if (firebaseUser && !isTestMode) {
-      localStorage.setItem(`igy_profile_${firebaseUser.uid}`, JSON.stringify(editForm));
+      await setDoc(doc(db, 'profiles', firebaseUser.uid), editForm);
     }
     if (needsProfileSetup) {
       setNeedsProfileSetup(false);
@@ -289,15 +244,11 @@ const App = () => {
   const HELPER_TAGS = ['Reliable', 'Friendly', 'On-time', 'Communicative'];
   const REQUESTER_TAGS = ['Clear communication', 'Respectful', 'Flexible', 'Grateful'];
 
-  // Review helpers
-  const getAllReviews = () => JSON.parse(localStorage.getItem('igy_reviews') || '[]');
-
+  // Review helpers — allReviews is populated by Firestore real-time listener
   const getVisibleReviewsFor = (name) => {
-    const all = getAllReviews();
-    const aboutUser = all.filter(r => r.revieweeName === name);
+    const aboutUser = allReviews.filter(r => r.revieweeName === name);
     return aboutUser.filter(review => {
-      // Blind reveal: both parties must have a record for this requestId
-      const counterpart = all.find(
+      const counterpart = allReviews.find(
         r => r.requestId === review.requestId && r.reviewerName === name
       );
       return counterpart && !review.skipped;
@@ -318,15 +269,16 @@ const App = () => {
     setReviewTags([]);
   };
 
-  const handleSubmitReview = () => {
+  const handleSubmitReview = async () => {
     if (!reviewTarget || reviewStars === 0 || !reviewTitle.trim()) return;
-    let reviews = getAllReviews();
 
-    // Remove any existing review from this reviewer for this reviewee (one review per pair)
-    reviews = reviews.filter(r => !(r.reviewerName === reviewTarget.reviewerName && r.revieweeName === reviewTarget.revieweeName));
+    // Remove any existing review from this reviewer for this reviewee
+    const existing = allReviews.find(r => r.reviewerName === reviewTarget.reviewerName && r.revieweeName === reviewTarget.revieweeName);
+    if (existing) {
+      await deleteDoc(doc(db, 'reviews', existing.id));
+    }
 
-    reviews.push({
-      id: Date.now(),
+    await addDoc(collection(db, 'reviews'), {
       requestId: reviewTarget.requestId,
       requestTitle: reviewTarget.requestTitle,
       reviewerName: reviewTarget.reviewerName,
@@ -339,27 +291,22 @@ const App = () => {
       skipped: false,
       createdAt: new Date().toISOString()
     });
-    localStorage.setItem('igy_reviews', JSON.stringify(reviews));
 
-    // Remove from pending
-    const pendingKey = `igy_pending_reviews_${userProfile.nickname}`;
-    const pending = JSON.parse(localStorage.getItem(pendingKey) || '[]');
-    const updated = pending.filter(p => p.requestId !== reviewTarget.requestId);
-    localStorage.setItem(pendingKey, JSON.stringify(updated));
-    setPendingReviews(updated);
+    // Remove from pending reviews in Firestore
+    const myPending = pendingReviews.filter(p => p.requestId === reviewTarget.requestId);
+    for (const p of myPending) {
+      if (p.id) await deleteDoc(doc(db, 'pendingReviews', p.id));
+    }
 
-    // Show confirmation screen (don't close modal yet)
     setShowReviewConfirmation(true);
   };
 
   const handleReviewConfirmationClose = () => {
     setShowReviewConfirmation(false);
 
-    // Check for more pending reviews
-    const pendingKey = `igy_pending_reviews_${userProfile.nickname}`;
-    const remaining = JSON.parse(localStorage.getItem(pendingKey) || '[]');
-    if (remaining.length > 0) {
-      const next = remaining[0];
+    // pendingReviews is updated in real-time by Firestore listener
+    if (pendingReviews.length > 0) {
+      const next = pendingReviews[0];
       setReviewTarget({ requestId: next.requestId, requestTitle: next.requestTitle, revieweeName: next.otherUserName, reviewerName: userProfile.nickname, role: next.role });
       resetReviewForm();
     } else {
@@ -371,15 +318,15 @@ const App = () => {
     }
   };
 
-  const handleSkipReview = () => {
+  const handleSkipReview = async () => {
     if (!reviewTarget) return;
-    let reviews = getAllReviews();
 
-    // Remove any existing review from this reviewer for this reviewee
-    reviews = reviews.filter(r => !(r.reviewerName === reviewTarget.reviewerName && r.revieweeName === reviewTarget.revieweeName));
+    const existing = allReviews.find(r => r.reviewerName === reviewTarget.reviewerName && r.revieweeName === reviewTarget.revieweeName);
+    if (existing) {
+      await deleteDoc(doc(db, 'reviews', existing.id));
+    }
 
-    reviews.push({
-      id: Date.now(),
+    await addDoc(collection(db, 'reviews'), {
       requestId: reviewTarget.requestId,
       requestTitle: reviewTarget.requestTitle,
       reviewerName: reviewTarget.reviewerName,
@@ -392,18 +339,17 @@ const App = () => {
       skipped: true,
       createdAt: new Date().toISOString()
     });
-    localStorage.setItem('igy_reviews', JSON.stringify(reviews));
 
-    // Remove from pending
-    const pendingKey = `igy_pending_reviews_${userProfile.nickname}`;
-    const pending = JSON.parse(localStorage.getItem(pendingKey) || '[]');
-    const updated = pending.filter(p => p.requestId !== reviewTarget.requestId);
-    localStorage.setItem(pendingKey, JSON.stringify(updated));
-    setPendingReviews(updated);
+    // Remove from pending reviews in Firestore
+    const myPending = pendingReviews.filter(p => p.requestId === reviewTarget.requestId);
+    for (const p of myPending) {
+      if (p.id) await deleteDoc(doc(db, 'pendingReviews', p.id));
+    }
 
-    // Check for more pending reviews
-    if (updated.length > 0) {
-      const next = updated[0];
+    // Check remaining pending reviews (updated by listener)
+    const remaining = pendingReviews.filter(p => p.requestId !== reviewTarget.requestId);
+    if (remaining.length > 0) {
+      const next = remaining[0];
       setReviewTarget({ requestId: next.requestId, requestTitle: next.requestTitle, revieweeName: next.otherUserName, reviewerName: userProfile.nickname, role: next.role });
       resetReviewForm();
     } else {
@@ -428,7 +374,7 @@ const App = () => {
     g => g.userName === userProfile.nickname && g.postedAt.slice(0, 10) === todayStr
   );
 
-  const handleCreateGive = () => {
+  const handleCreateGive = async () => {
     if (!giveForm.title || !giveForm.content) {
       alert('Please add a title and something to share');
       return;
@@ -437,19 +383,16 @@ const App = () => {
       alert('You can only share one positivity post per day. Come back tomorrow!');
       return;
     }
-    const newGive = {
-      id: Date.now(),
+    await addDoc(collection(db, 'communityGives'), {
       title: giveForm.title,
       content: giveForm.content,
       imageUrl: giveForm.imageUrl,
       userName: userProfile.nickname,
       userInitial: userProfile.nickname[0].toUpperCase(),
       postedAt: new Date().toISOString()
-    };
-    setCommunityGives([newGive, ...communityGives]);
+    });
     setGiveForm({ title: '', content: '', imageUrl: '' });
 
-    // If user came from the request limit modal, take them straight to the new request form
     if (giveFormFromLimit) {
       setGiveFormFromLimit(false);
       setScreen('newRequest');
@@ -459,7 +402,7 @@ const App = () => {
     }
   };
 
-  const handleCreateRequest = () => {
+  const handleCreateRequest = async () => {
     if (!requestForm.title || !requestForm.description || !requestForm.dateNeeded || !requestForm.category) {
       alert('Please fill in all required fields');
       return;
@@ -470,127 +413,76 @@ const App = () => {
       return;
     }
 
-    // Create new request
-    const newRequest = {
-      id: Date.now(),
+    await addDoc(collection(db, 'requests'), {
       ...requestForm,
       userName: userProfile.nickname,
       userInitial: userProfile.nickname[0].toUpperCase(),
+      userEmail: userProfile.email,
+      userPhone: userProfile.phone,
+      userId: firebaseUser?.uid || '',
       status: 'open',
       postedAt: new Date().toISOString()
-    };
-    
-    // Add to posted requests
-    setPostedRequests([newRequest, ...postedRequests]);
-    
-    // Show confirmation
+    });
+
     setShowConfirmation(true);
   };
 
-  const handleConfirmAccept = () => {
-    // Check if already accepted (prevent duplicates)
+  const handleConfirmAccept = async () => {
     if (helpingRequests.some(r => r.id === selectedRequest.id)) {
       setShowAcceptModal(false);
       alert('You have already accepted this request!');
       return;
     }
-    
-    // Update request status in postedRequests (keep it there for the requestor to see)
-    const updatedRequests = postedRequests.map(r => 
-      r.id === selectedRequest.id 
-        ? { ...r, status: 'accepted', acceptedBy: userProfile.nickname, acceptedAt: new Date().toISOString() }
-        : r
-    );
-    setPostedRequests(updatedRequests);
-    
-    // Add to helping requests with status 'accepted'
-    const acceptedRequest = {
-      ...selectedRequest,
+
+    // Update request in Firestore
+    await updateDoc(doc(db, 'requests', selectedRequest.id), {
       status: 'accepted',
       acceptedBy: userProfile.nickname,
+      acceptedByUserId: firebaseUser?.uid || '',
       acceptedAt: new Date().toISOString()
-    };
-    setHelpingRequests([...helpingRequests, acceptedRequest]);
-    
-    // Notify the requester that someone accepted
-    const requesterName = selectedRequest.userName;
-    if (requesterName) {
-      const notifKey = `igy_notifications_${requesterName}`;
-      const notifs = JSON.parse(localStorage.getItem(notifKey) || '[]');
-      notifs.push({
-        id: Date.now(),
-        type: 'accepted',
-        message: `${userProfile.nickname} has accepted your request "${selectedRequest.title}"`,
-        requestId: selectedRequest.id,
-        createdAt: new Date().toISOString(),
-        read: false
-      });
-      localStorage.setItem(notifKey, JSON.stringify(notifs));
-    }
+    });
 
-    // Close accept modal and show confirmation
+    // Create notification for the requester
+    await addDoc(collection(db, 'notifications'), {
+      userId: selectedRequest.userName,
+      type: 'accepted',
+      message: `${userProfile.nickname} has accepted your request "${selectedRequest.title}"`,
+      requestId: selectedRequest.id,
+      createdAt: new Date().toISOString(),
+      read: false
+    });
+
     setShowAcceptModal(false);
     setShowAcceptConfirmation(true);
   };
 
-  const handleCancelCommitment = () => {
-    // Remove from helping requests
-    const updatedHelping = helpingRequests.filter(r => r.id !== selectedRequest.id);
-    setHelpingRequests(updatedHelping);
-    
-    // Repost to community feed
-    const repostedRequest = {
-      ...selectedRequest,
+  const handleCancelCommitment = async () => {
+    // Revert request to open in Firestore
+    await updateDoc(doc(db, 'requests', selectedRequest.id), {
       status: 'open',
       acceptedBy: null,
+      acceptedByUserId: null,
       acceptedAt: null
-    };
-    setPostedRequests([repostedRequest, ...postedRequests]);
-    
-    // Show confirmation and reset state
+    });
+
     setShowCancelConfirmation(true);
     setHasReachedOut(false);
   };
 
-  const handleMarkComplete = (isHelper) => {
+  const handleMarkComplete = async (isHelper) => {
     const now = new Date().toISOString();
-    
+    const requestRef = doc(db, 'requests', selectedRequest.id);
+
+    // Get fresh data from Firestore to check other party's status
+    const freshDoc = await getDoc(requestRef);
+    const freshData = freshDoc.data();
+
     if (isHelper) {
-      // Helper marking as complete
-      const updatedHelping = helpingRequests.map(r =>
-        r.id === selectedRequest.id
-          ? { ...r, helperConfirmed: true, helperConfirmedAt: now }
-          : r
-      );
-      setHelpingRequests(updatedHelping);
-
-      // Also update in postedRequests so requestor sees the status
-      const updatedPosted = postedRequests.map(r =>
-        r.id === selectedRequest.id
-          ? { ...r, helperConfirmed: true, helperConfirmedAt: now }
-          : r
-      );
-      setPostedRequests(updatedPosted);
-
-      // Persist helperConfirmed to localStorage immediately so the other tab sees it
-      const freshPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
-      const persistedPosted = freshPosted.map(r =>
-        r.id === selectedRequest.id
-          ? { ...r, helperConfirmed: true, helperConfirmedAt: now }
-          : r
-      );
-      localStorage.setItem('igy_posted_requests', JSON.stringify(persistedPosted));
-
-      // Update selected request for immediate UI feedback
-      const freshRequest = freshPosted.find(r => r.id === selectedRequest.id);
-      const updatedRequest = { ...selectedRequest, ...freshRequest, helperConfirmed: true, helperConfirmedAt: now };
+      await updateDoc(requestRef, { helperConfirmed: true, helperConfirmedAt: now });
+      const updatedRequest = { ...selectedRequest, ...freshData, helperConfirmed: true, helperConfirmedAt: now };
       setSelectedRequest(updatedRequest);
 
-      // Check if the requestor already confirmed
-      const requesterAlreadyConfirmed = updatedRequest.requesterConfirmed;
-
-      if (requesterAlreadyConfirmed) {
-        // Both confirmed - move to completed
+      if (freshData.requesterConfirmed) {
         moveToCompleted(updatedRequest);
       } else {
         alert(`Marked as complete! Waiting for ${selectedRequest.userName} to confirm.`);
@@ -598,54 +490,11 @@ const App = () => {
         setActiveTab('myActivity');
       }
     } else {
-      // Requestor marking as complete
-      // Persist requesterConfirmed to localStorage immediately so the other tab sees it
-      const freshPosted = JSON.parse(localStorage.getItem('igy_posted_requests') || '[]');
-      const persistedPosted = freshPosted.map(r =>
-        r.id === selectedRequest.id
-          ? { ...r, requesterConfirmed: true, requesterConfirmedAt: now }
-          : r
-      );
-      localStorage.setItem('igy_posted_requests', JSON.stringify(persistedPosted));
-
-      const updatedRequests = postedRequests.map(r =>
-        r.id === selectedRequest.id
-          ? { ...r, requesterConfirmed: true, requesterConfirmedAt: now }
-          : r
-      );
-      setPostedRequests(updatedRequests);
-
-      // Also update in helpingRequests so helper sees the status
-      const updatedHelping = helpingRequests.map(r =>
-        r.id === selectedRequest.id
-          ? { ...r, requesterConfirmed: true, requesterConfirmedAt: now }
-          : r
-      );
-      setHelpingRequests(updatedHelping);
-
-      // Update selected request for immediate UI feedback
-      const freshRequest = freshPosted.find(r => r.id === selectedRequest.id);
-      const updatedRequest = { ...selectedRequest, ...freshRequest, requesterConfirmed: true, requesterConfirmedAt: now };
+      await updateDoc(requestRef, { requesterConfirmed: true, requesterConfirmedAt: now });
+      const updatedRequest = { ...selectedRequest, ...freshData, requesterConfirmed: true, requesterConfirmedAt: now };
       setSelectedRequest(updatedRequest);
 
-      // Write requesterConfirmed to the helper's localStorage so they see the action item
-      const helperName = selectedRequest.acceptedBy;
-      if (helperName) {
-        const helperKey = `igy_helping_requests_${helperName}`;
-        const helperRequests = JSON.parse(localStorage.getItem(helperKey) || '[]');
-        localStorage.setItem(helperKey, JSON.stringify(
-          helperRequests.map(r => r.id === selectedRequest.id
-            ? { ...r, requesterConfirmed: true, requesterConfirmedAt: now }
-            : r
-          )
-        ));
-      }
-
-      // Check if the helper already confirmed
-      const helperAlreadyConfirmed = updatedRequest.helperConfirmed;
-
-      if (helperAlreadyConfirmed) {
-        // Both confirmed - move to completed
+      if (freshData.helperConfirmed) {
         moveToCompleted(updatedRequest);
       } else {
         alert(`Marked as complete! Waiting for ${selectedRequest.acceptedBy} to confirm.`);
@@ -655,53 +504,38 @@ const App = () => {
     }
   };
 
-  const moveToCompleted = (request) => {
-    const completedRequest = {
-      ...request,
-      status: 'completed',
-      completedAt: new Date().toISOString()
-    };
-
+  const moveToCompleted = async (request) => {
     const helperName = request.acceptedBy;
     const requesterName = request.userName;
     const otherUser = userProfile.nickname === helperName ? requesterName : helperName;
 
-    // Update React state for this user
-    setCompletedRequests([completedRequest, ...completedRequests]);
-    setHelpingRequests(helpingRequests.filter(r => r.id !== request.id));
+    // Update request status in Firestore
+    await updateDoc(doc(db, 'requests', request.id), {
+      status: 'completed',
+      completedAt: new Date().toISOString()
+    });
 
-    // Write to igy_posted_requests immediately (before React effects run) so that
-    // the polling in the other tab reads the already-removed request and doesn't
-    // restore it back into active.
-    const updatedPosted = postedRequests.filter(r => r.id !== request.id);
-    setPostedRequests(updatedPosted);
-    localStorage.setItem('igy_posted_requests', JSON.stringify(updatedPosted));
-
-    // Update the other user's localStorage directly so their tab picks it up via polling.
-    if (otherUser) {
-      const otherHelpingKey = `igy_helping_requests_${otherUser}`;
-      const otherHelping = JSON.parse(localStorage.getItem(otherHelpingKey) || '[]');
-      localStorage.setItem(otherHelpingKey, JSON.stringify(otherHelping.filter(r => r.id !== request.id)));
-
-      const otherCompletedKey = `igy_completed_requests_${otherUser}`;
-      const otherCompleted = JSON.parse(localStorage.getItem(otherCompletedKey) || '[]');
-      localStorage.setItem(otherCompletedKey, JSON.stringify([completedRequest, ...otherCompleted]));
-    }
-
-    // Create pending reviews for both users
+    // Create pending reviews for both users in Firestore
     const myRole = userProfile.nickname === helperName ? 'helper' : 'requester';
-    const pendingEntry = { requestId: request.id, requestTitle: request.title, otherUserName: otherUser, role: myRole };
-    const myPendingKey = `igy_pending_reviews_${userProfile.nickname}`;
-    const myPending = JSON.parse(localStorage.getItem(myPendingKey) || '[]');
-    myPending.push(pendingEntry);
-    localStorage.setItem(myPendingKey, JSON.stringify(myPending));
+    await addDoc(collection(db, 'pendingReviews'), {
+      userName: userProfile.nickname,
+      requestId: request.id,
+      requestTitle: request.title,
+      otherUserName: otherUser,
+      role: myRole,
+      createdAt: new Date().toISOString()
+    });
 
     if (otherUser) {
       const otherRole = myRole === 'helper' ? 'requester' : 'helper';
-      const otherPendingKey = `igy_pending_reviews_${otherUser}`;
-      const otherPending = JSON.parse(localStorage.getItem(otherPendingKey) || '[]');
-      otherPending.push({ requestId: request.id, requestTitle: request.title, otherUserName: userProfile.nickname, role: otherRole });
-      localStorage.setItem(otherPendingKey, JSON.stringify(otherPending));
+      await addDoc(collection(db, 'pendingReviews'), {
+        userName: otherUser,
+        requestId: request.id,
+        requestTitle: request.title,
+        otherUserName: userProfile.nickname,
+        role: otherRole,
+        createdAt: new Date().toISOString()
+      });
     }
 
     // Show review modal
@@ -786,14 +620,8 @@ const App = () => {
     </div>
   );
 
-  // Load profile from localStorage on mount
+  // Profile is now loaded from Firestore in the auth state listener
   useState(() => {
-    const savedProfile = localStorage.getItem('igy_user_profile');
-    if (savedProfile) {
-      const parsed = JSON.parse(savedProfile);
-      setUserProfile(parsed);
-      setEditForm(parsed);
-    }
   }, []);
 
   const handleEmailAuth = async (e) => {
@@ -1331,8 +1159,8 @@ const App = () => {
                     <button
                       onClick={() => {
                         if (overrideUsed) return;
-                        localStorage.setItem(`igy_override_used_${userProfile.nickname}`, 'true');
                         setOverrideUsed(true);
+                        if (firebaseUser) setDoc(doc(db, 'profiles', firebaseUser.uid), { overrideUsed: true }, { merge: true });
                         setShowRequestLimitModal(false);
                         setScreen('newRequest');
                       }}
@@ -1695,7 +1523,7 @@ const App = () => {
     }
 
     if (screen === 'editProfile') {
-      const isNewUserSetup = firebaseUser && !isTestMode && !localStorage.getItem(`igy_profile_${firebaseUser.uid}`);
+      const isNewUserSetup = needsProfileSetup;
       return (
         <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
           {isNewUserSetup ? (
@@ -2039,10 +1867,7 @@ const App = () => {
                   </div>
                   <button
                     onClick={() => {
-                      const notifKey = `igy_notifications_${userProfile.nickname}`;
-                      const updated = notifications.map(n => n.id === notif.id ? { ...n, read: true } : n);
-                      setNotifications(updated);
-                      localStorage.setItem(notifKey, JSON.stringify(updated));
+                      updateDoc(doc(db, 'notifications', notif.id), { read: true });
                     }}
                     className="text-green-400 hover:text-green-600 text-lg font-bold flex-shrink-0"
                   >
@@ -2605,8 +2430,8 @@ const App = () => {
                   <button
                     onClick={() => {
                       if (overrideUsed) return;
-                      localStorage.setItem(`igy_override_used_${userProfile.nickname}`, 'true');
                       setOverrideUsed(true);
+                      if (firebaseUser) setDoc(doc(db, 'profiles', firebaseUser.uid), { overrideUsed: true }, { merge: true });
                       setShowRequestLimitModal(false);
                       setScreen('newRequest');
                     }}
