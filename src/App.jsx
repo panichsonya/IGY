@@ -20,6 +20,7 @@ const App = () => {
   const [authError, setAuthError] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [isTestMode, setIsTestMode] = useState(false);
+  const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
   const [screen, setScreen] = useState('main'); // 'main', 'profile', 'editProfile', 'newRequest', or 'requestDetail'
   const [activeTab, setActiveTab] = useState('community'); // 'community' or 'myActivity'
   const [selectedRequest, setSelectedRequest] = useState(null);
@@ -70,116 +71,7 @@ const App = () => {
   // Store posted requests
   const [postedRequests, setPostedRequests] = useState(() => {
     const saved = localStorage.getItem('igy_posted_requests');
-    let requests = saved ? JSON.parse(saved) : [];
-
-    // Seed requests for Jane Smith (add any that are missing and not completed)
-    const allCompletedKeys = Object.keys(localStorage).filter(k => k.startsWith('igy_completed_requests_'));
-    const allCompleted = allCompletedKeys.flatMap(key => JSON.parse(localStorage.getItem(key) || '[]'));
-
-    const janeSeeds = [
-      {
-        id: 1000,
-        title: 'Need ride to doctor appointment',
-        description: 'I have a follow-up at Swedish Medical Center after my surgery and can\'t drive yet. Need a ride there and back. Appointment is at 2:00 PM.',
-        neighborhood: 'Capitol Hill',
-        category: 'errand',
-        dateNeeded: '2026-05-10',
-        isDateRange: false,
-        endDate: '',
-        time: '14:00',
-        userName: 'Jane Smith',
-        userInitial: 'J',
-        userEmail: 'jane.smith@email.com',
-        userPhone: '206-555-0199',
-        status: 'open',
-        postedAt: new Date().toISOString()
-      },
-      {
-        id: 1001,
-        title: 'Prescription pickup from Walgreens',
-        description: 'I\'m home sick and can\'t make it to the pharmacy. Need someone to pick up my prescription — it\'s ready under my name.',
-        neighborhood: 'Capitol Hill',
-        category: 'errand',
-        dateNeeded: '2026-05-08',
-        isDateRange: false,
-        endDate: '',
-        time: '10:00',
-        userName: 'Jane Smith',
-        userInitial: 'J',
-        status: 'open',
-        postedAt: new Date().toISOString()
-      },
-      {
-        id: 1002,
-        title: 'Cat feeding while I\'m in the hospital',
-        description: 'Having a procedure done and will be in the hospital for 2 days. Need someone to feed my cat and clean her litter box.',
-        neighborhood: 'Capitol Hill',
-        category: 'favor',
-        dateNeeded: '2026-05-12',
-        isDateRange: true,
-        endDate: '2026-05-13',
-        time: '09:00',
-        userName: 'Jane Smith',
-        userInitial: 'J',
-        status: 'open',
-        postedAt: new Date().toISOString()
-      },
-      {
-        id: 1003,
-        title: 'Grocery pickup from PCC',
-        description: 'Recovering from a bad flu — could someone grab a few items from PCC for me? They don\'t deliver to my address.',
-        neighborhood: 'Capitol Hill',
-        category: 'errand',
-        dateNeeded: '2026-05-09',
-        isDateRange: false,
-        endDate: '',
-        time: '15:00',
-        userName: 'Jane Smith',
-        userInitial: 'J',
-        status: 'open',
-        postedAt: new Date().toISOString()
-      },
-      {
-        id: 1004,
-        title: 'Take out trash bins — can\'t lift right now',
-        description: 'Recovering from back surgery and can\'t lift the bins to the curb. Just need them wheeled out Wednesday night.',
-        neighborhood: 'Capitol Hill',
-        category: 'home-help',
-        dateNeeded: '2026-05-14',
-        isDateRange: false,
-        endDate: '',
-        time: '19:00',
-        userName: 'Jane Smith',
-        userInitial: 'J',
-        status: 'open',
-        postedAt: new Date().toISOString()
-      },
-      {
-        id: 1005,
-        title: 'Dog walking — recovering from injury',
-        description: 'Sprained my ankle badly and can\'t walk my dog. He needs about 30 minutes around noon. I live on the first floor so no stairs.',
-        neighborhood: 'Capitol Hill',
-        category: 'favor',
-        dateNeeded: '2026-05-08',
-        isDateRange: false,
-        endDate: '',
-        time: '12:00',
-        userName: 'Jane Smith',
-        userInitial: 'J',
-        status: 'open',
-        postedAt: new Date().toISOString()
-      }
-    ];
-
-    for (const seed of janeSeeds) {
-      const alreadyPosted = requests.some(r => r.id === seed.id);
-      const alreadyCompleted = allCompleted.some(r => r.id === seed.id);
-      if (!alreadyPosted && !alreadyCompleted) {
-        requests = [seed, ...requests];
-      }
-    }
-
-    return requests;
+    return saved ? JSON.parse(saved) : [];
   });
   
   // Store requests user is helping with (user-specific)
@@ -250,22 +142,24 @@ const App = () => {
           const profile = JSON.parse(savedProfile);
           setUserProfile(profile);
           setEditForm(profile);
+          setUserName(profile.nickname || displayName);
         } else {
+          // New user — needs profile setup
           const newProfile = {
             nickname: displayName,
             ageRange: '',
             gender: '',
             email: user.email || '',
-            neighborhood: 'Ballard',
+            neighborhood: '',
             phone: '',
             bio: '',
             uid: user.uid
           };
           setUserProfile(newProfile);
           setEditForm(newProfile);
-          localStorage.setItem(`igy_profile_${user.uid}`, JSON.stringify(newProfile));
+          setUserName(displayName);
+          setNeedsProfileSetup(true);
         }
-        setUserName(displayName);
         setLoggedIn(true);
       } else if (!isTestMode) {
         setLoggedIn(false);
@@ -365,14 +259,19 @@ const App = () => {
 
   const handleSaveProfile = (e) => {
     if (e) e.preventDefault();
-    console.log('Saving profile:', editForm);
     setUserProfile(editForm);
+    setUserName(editForm.nickname);
     localStorage.setItem('igy_user_profile', JSON.stringify(editForm));
     if (firebaseUser && !isTestMode) {
       localStorage.setItem(`igy_profile_${firebaseUser.uid}`, JSON.stringify(editForm));
     }
-    setScreen('profile');
-    alert('Profile updated successfully!');
+    if (needsProfileSetup) {
+      setNeedsProfileSetup(false);
+      setScreen('main');
+    } else {
+      setScreen('profile');
+      alert('Profile updated successfully!');
+    }
   };
 
   // Reciprocity limit logic
@@ -950,6 +849,109 @@ const App = () => {
             <Heart className="w-8 h-8 text-white" fill="white" />
           </div>
           <p className="text-slate-500">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loggedIn && needsProfileSetup) {
+    // Force new users to complete profile before accessing the app
+    const isNewUserSetup = true;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
+        <div className="bg-white shadow-sm border-b border-slate-100 px-4 py-4">
+          <div className="max-w-2xl mx-auto text-center">
+            <h1 className="text-2xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>Welcome to IGY!</h1>
+            <p className="text-slate-500 text-sm mt-1">Set up your profile to get started</p>
+          </div>
+        </div>
+        <div className="max-w-2xl mx-auto px-4 py-6">
+          <div className="bg-white rounded-3xl shadow-xl p-6">
+            <div className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Display Name *</label>
+                <input
+                  type="text"
+                  value={editForm.nickname}
+                  onChange={(e) => setEditForm({ ...editForm, nickname: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                  placeholder="What should people call you?"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Age Range *</label>
+                <select
+                  value={editForm.ageRange}
+                  onChange={(e) => setEditForm({ ...editForm, ageRange: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                >
+                  <option value="">Select age range</option>
+                  {['18-29', '30-39', '40-49', '50-59', '60-69', '70+'].map(range => (
+                    <option key={range} value={range}>{range}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Gender *</label>
+                <select
+                  value={editForm.gender}
+                  onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                >
+                  <option value="">Select gender</option>
+                  {['Male', 'Female', 'Non-binary', 'Prefer not to say', 'Other'].map(g => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Email *</label>
+                <input
+                  type="email"
+                  value={editForm.email}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Neighborhood *</label>
+                <select
+                  value={editForm.neighborhood}
+                  onChange={(e) => setEditForm({ ...editForm, neighborhood: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                >
+                  <option value="">Select your neighborhood</option>
+                  {SEATTLE_NEIGHBORHOODS.map(n => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Phone Number *</label>
+                <input
+                  type="tel"
+                  value={editForm.phone}
+                  onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Bio (Optional)</label>
+                <textarea
+                  value={editForm.bio}
+                  onChange={(e) => setEditForm({ ...editForm, bio: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors h-24 resize-none"
+                  placeholder="Tell us a bit about yourself..."
+                />
+              </div>
+              <button
+                onClick={() => handleSaveProfile()}
+                className="w-full bg-gradient-to-r from-rose-400 to-orange-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all"
+              >
+                Get Started
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -1693,32 +1695,47 @@ const App = () => {
     }
 
     if (screen === 'editProfile') {
+      const isNewUserSetup = firebaseUser && !isTestMode && !localStorage.getItem(`igy_profile_${firebaseUser.uid}`);
       return (
         <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
-          <Header showBackButton={true} onBack={() => setScreen('profile')} />
+          {isNewUserSetup ? (
+            <div className="bg-white shadow-sm border-b border-slate-100 px-4 py-4">
+              <div className="max-w-2xl mx-auto text-center">
+                <h1 className="text-2xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>Welcome to IGY!</h1>
+                <p className="text-slate-500 text-sm mt-1">Set up your profile to get started</p>
+              </div>
+            </div>
+          ) : (
+            <Header showBackButton={true} onBack={() => setScreen('profile')} />
+          )}
 
           <div className="max-w-2xl mx-auto px-4 py-6">
             <div className="bg-white rounded-3xl shadow-xl p-6">
               <div className="space-y-5">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Nickname</label>
-                  <input 
-                    type="text" 
+                  <label className="block text-sm font-medium text-slate-700 mb-2">{isNewUserSetup ? 'Display Name *' : 'Nickname'}</label>
+                  <input
+                    type="text"
                     value={editForm.nickname}
-                    disabled
-                    className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-500 cursor-not-allowed"
+                    onChange={isNewUserSetup ? (e) => setEditForm({ ...editForm, nickname: e.target.value }) : undefined}
+                    disabled={!isNewUserSetup}
+                    className={isNewUserSetup
+                      ? "w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                      : "w-full px-4 py-3 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-500 cursor-not-allowed"}
+                    placeholder="What should people call you?"
                   />
-                  <p className="text-xs text-slate-500 mt-1">Nickname cannot be changed</p>
+                  {!isNewUserSetup && <p className="text-xs text-slate-500 mt-1">Nickname cannot be changed</p>}
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Age Range *</label>
-                  <select 
+                  <select
                     value={editForm.ageRange}
                     onChange={(e) => setEditForm({ ...editForm, ageRange: e.target.value })}
                     className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
                     required
                   >
+                    <option value="">Select age range</option>
                     {['18-29', '30-39', '40-49', '50-59', '60-69', '70+'].map(range => (
                       <option key={range} value={range}>{range}</option>
                     ))}
@@ -1727,12 +1744,13 @@ const App = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Gender *</label>
-                  <select 
+                  <select
                     value={editForm.gender}
                     onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
                     className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
                     required
                   >
+                    <option value="">Select gender</option>
                     {['Male', 'Female', 'Non-binary', 'Prefer not to say', 'Other'].map(g => (
                       <option key={g} value={g}>{g}</option>
                     ))}
@@ -1752,12 +1770,13 @@ const App = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Neighborhood *</label>
-                  <select 
+                  <select
                     value={editForm.neighborhood}
                     onChange={(e) => setEditForm({ ...editForm, neighborhood: e.target.value })}
                     className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
                     required
                   >
+                    <option value="">Select your neighborhood</option>
                     {SEATTLE_NEIGHBORHOODS.map(n => (
                       <option key={n} value={n}>{n}</option>
                     ))}
@@ -1785,11 +1804,11 @@ const App = () => {
                   />
                 </div>
 
-                <button 
+                <button
                   onClick={() => handleSaveProfile()}
                   className="w-full bg-gradient-to-r from-rose-400 to-orange-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all"
                 >
-                  Save Changes
+                  {isNewUserSetup ? 'Get Started' : 'Save Changes'}
                 </button>
               </div>
             </div>
