@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Heart, MapPin, Clock, Send, Users, Star, Check, AlertCircle } from 'lucide-react';
+import { auth, googleProvider } from './firebase';
+import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 
 const SEATTLE_NEIGHBORHOODS = [
   'Ballard', 'Capitol Hill', 'Central District', 'Downtown', 'Fremont',
@@ -13,6 +15,11 @@ const App = () => {
   const [loggedIn, setLoggedIn] = useState(false);
   const [userName, setUserName] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [isTestMode, setIsTestMode] = useState(false);
   const [screen, setScreen] = useState('main'); // 'main', 'profile', 'editProfile', 'newRequest', or 'requestDetail'
   const [activeTab, setActiveTab] = useState('community'); // 'community' or 'myActivity'
   const [selectedRequest, setSelectedRequest] = useState(null);
@@ -30,6 +37,7 @@ const App = () => {
   const [reviewTitle, setReviewTitle] = useState('');
   const [reviewText, setReviewText] = useState('');
   const [reviewTags, setReviewTags] = useState([]);
+  const [showReviewConfirmation, setShowReviewConfirmation] = useState(false);
   const [viewingProfile, setViewingProfile] = useState(null); // for read-only other-user profile
   const [pendingReviews, setPendingReviews] = useState([]); // non-intrusive nudge list
 
@@ -52,7 +60,7 @@ const App = () => {
     title: '',
     description: '',
     neighborhood: 'Ballard',
-    urgency: 'medium',
+    category: '',
     dateNeeded: '',
     isDateRange: false,
     endDate: '',
@@ -72,10 +80,10 @@ const App = () => {
       {
         id: 1000,
         title: 'Need ride to doctor appointment',
-        description: 'I have a doctor appointment at Swedish Medical Center and need a ride there and back. Appointment is at 2:00 PM. Should take about 2 hours total.',
+        description: 'I have a follow-up at Swedish Medical Center after my surgery and can\'t drive yet. Need a ride there and back. Appointment is at 2:00 PM.',
         neighborhood: 'Capitol Hill',
-        urgency: 'high',
-        dateNeeded: '2026-03-01',
+        category: 'errand',
+        dateNeeded: '2026-05-10',
         isDateRange: false,
         endDate: '',
         time: '14:00',
@@ -88,11 +96,11 @@ const App = () => {
       },
       {
         id: 1001,
-        title: 'Help moving a bookshelf',
-        description: 'Need someone to help me move a heavy bookshelf from the living room to the bedroom.',
+        title: 'Prescription pickup from Walgreens',
+        description: 'I\'m home sick and can\'t make it to the pharmacy. Need someone to pick up my prescription — it\'s ready under my name.',
         neighborhood: 'Capitol Hill',
-        urgency: 'low',
-        dateNeeded: '2026-04-20',
+        category: 'errand',
+        dateNeeded: '2026-05-08',
         isDateRange: false,
         endDate: '',
         time: '10:00',
@@ -103,13 +111,13 @@ const App = () => {
       },
       {
         id: 1002,
-        title: 'Cat sitting this weekend',
-        description: 'Going out of town and need someone to check on my cat Saturday and Sunday.',
+        title: 'Cat feeding while I\'m in the hospital',
+        description: 'Having a procedure done and will be in the hospital for 2 days. Need someone to feed my cat and clean her litter box.',
         neighborhood: 'Capitol Hill',
-        urgency: 'medium',
-        dateNeeded: '2026-04-25',
+        category: 'favor',
+        dateNeeded: '2026-05-12',
         isDateRange: true,
-        endDate: '2026-04-26',
+        endDate: '2026-05-13',
         time: '09:00',
         userName: 'Jane Smith',
         userInitial: 'J',
@@ -119,10 +127,10 @@ const App = () => {
       {
         id: 1003,
         title: 'Grocery pickup from PCC',
-        description: 'Recovering from a cold — could someone grab a few items from PCC for me?',
+        description: 'Recovering from a bad flu — could someone grab a few items from PCC for me? They don\'t deliver to my address.',
         neighborhood: 'Capitol Hill',
-        urgency: 'medium',
-        dateNeeded: '2026-04-22',
+        category: 'errand',
+        dateNeeded: '2026-05-09',
         isDateRange: false,
         endDate: '',
         time: '15:00',
@@ -133,14 +141,14 @@ const App = () => {
       },
       {
         id: 1004,
-        title: 'Help assembling IKEA shelf',
-        description: 'Just got a new IKEA shelf and could use an extra pair of hands putting it together.',
+        title: 'Take out trash bins — can\'t lift right now',
+        description: 'Recovering from back surgery and can\'t lift the bins to the curb. Just need them wheeled out Wednesday night.',
         neighborhood: 'Capitol Hill',
-        urgency: 'low',
-        dateNeeded: '2026-04-27',
+        category: 'home-help',
+        dateNeeded: '2026-05-14',
         isDateRange: false,
         endDate: '',
-        time: '11:00',
+        time: '19:00',
         userName: 'Jane Smith',
         userInitial: 'J',
         status: 'open',
@@ -148,11 +156,11 @@ const App = () => {
       },
       {
         id: 1005,
-        title: 'Dog walking while I\u2019m at work',
-        description: 'Need someone to walk my dog around noon — he needs about 30 minutes.',
+        title: 'Dog walking — recovering from injury',
+        description: 'Sprained my ankle badly and can\'t walk my dog. He needs about 30 minutes around noon. I live on the first floor so no stairs.',
         neighborhood: 'Capitol Hill',
-        urgency: 'high',
-        dateNeeded: '2026-04-21',
+        category: 'favor',
+        dateNeeded: '2026-05-08',
         isDateRange: false,
         endDate: '',
         time: '12:00',
@@ -228,6 +236,44 @@ const App = () => {
   React.useEffect(() => {
     setOverrideUsed(localStorage.getItem(`igy_override_used_${userProfile.nickname}`) === 'true');
   }, [userProfile.nickname]);
+
+  // Firebase auth state listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      setAuthLoading(false);
+      if (user && !isTestMode) {
+        // User is signed in via Firebase
+        const displayName = user.displayName || user.email.split('@')[0];
+        const savedProfile = localStorage.getItem(`igy_profile_${user.uid}`);
+        if (savedProfile) {
+          const profile = JSON.parse(savedProfile);
+          setUserProfile(profile);
+          setEditForm(profile);
+        } else {
+          const newProfile = {
+            nickname: displayName,
+            ageRange: '',
+            gender: '',
+            email: user.email || '',
+            neighborhood: 'Ballard',
+            phone: '',
+            bio: '',
+            uid: user.uid
+          };
+          setUserProfile(newProfile);
+          setEditForm(newProfile);
+          localStorage.setItem(`igy_profile_${user.uid}`, JSON.stringify(newProfile));
+        }
+        setUserName(displayName);
+        setLoggedIn(true);
+      } else if (!isTestMode) {
+        setLoggedIn(false);
+        setUserName('');
+      }
+    });
+    return () => unsubscribe();
+  }, [isTestMode]);
 
   // Reload user-specific data from localStorage whenever the active user changes.
   // This ensures each user sees their own helpingRequests and completedRequests
@@ -322,6 +368,9 @@ const App = () => {
     console.log('Saving profile:', editForm);
     setUserProfile(editForm);
     localStorage.setItem('igy_user_profile', JSON.stringify(editForm));
+    if (firebaseUser && !isTestMode) {
+      localStorage.setItem(`igy_profile_${firebaseUser.uid}`, JSON.stringify(editForm));
+    }
     setScreen('profile');
     alert('Profile updated successfully!');
   };
@@ -372,7 +421,11 @@ const App = () => {
 
   const handleSubmitReview = () => {
     if (!reviewTarget || reviewStars === 0 || !reviewTitle.trim()) return;
-    const reviews = getAllReviews();
+    let reviews = getAllReviews();
+
+    // Remove any existing review from this reviewer for this reviewee (one review per pair)
+    reviews = reviews.filter(r => !(r.reviewerName === reviewTarget.reviewerName && r.revieweeName === reviewTarget.revieweeName));
+
     reviews.push({
       id: Date.now(),
       requestId: reviewTarget.requestId,
@@ -396,9 +449,18 @@ const App = () => {
     localStorage.setItem(pendingKey, JSON.stringify(updated));
     setPendingReviews(updated);
 
+    // Show confirmation screen (don't close modal yet)
+    setShowReviewConfirmation(true);
+  };
+
+  const handleReviewConfirmationClose = () => {
+    setShowReviewConfirmation(false);
+
     // Check for more pending reviews
-    if (updated.length > 0) {
-      const next = updated[0];
+    const pendingKey = `igy_pending_reviews_${userProfile.nickname}`;
+    const remaining = JSON.parse(localStorage.getItem(pendingKey) || '[]');
+    if (remaining.length > 0) {
+      const next = remaining[0];
       setReviewTarget({ requestId: next.requestId, requestTitle: next.requestTitle, revieweeName: next.otherUserName, reviewerName: userProfile.nickname, role: next.role });
       resetReviewForm();
     } else {
@@ -412,7 +474,11 @@ const App = () => {
 
   const handleSkipReview = () => {
     if (!reviewTarget) return;
-    const reviews = getAllReviews();
+    let reviews = getAllReviews();
+
+    // Remove any existing review from this reviewer for this reviewee
+    reviews = reviews.filter(r => !(r.reviewerName === reviewTarget.reviewerName && r.revieweeName === reviewTarget.revieweeName));
+
     reviews.push({
       id: Date.now(),
       requestId: reviewTarget.requestId,
@@ -483,12 +549,19 @@ const App = () => {
     };
     setCommunityGives([newGive, ...communityGives]);
     setGiveForm({ title: '', content: '', imageUrl: '' });
-    setScreen('main');
-    setActiveTab('community');
+
+    // If user came from the request limit modal, take them straight to the new request form
+    if (giveFormFromLimit) {
+      setGiveFormFromLimit(false);
+      setScreen('newRequest');
+    } else {
+      setScreen('main');
+      setActiveTab('community');
+    }
   };
 
   const handleCreateRequest = () => {
-    if (!requestForm.title || !requestForm.description || !requestForm.dateNeeded) {
+    if (!requestForm.title || !requestForm.description || !requestForm.dateNeeded || !requestForm.category) {
       alert('Please fill in all required fields');
       return;
     }
@@ -794,8 +867,12 @@ const App = () => {
               </button>
               <button
                 onClick={() => {
+                  if (firebaseUser && !isTestMode) {
+                    signOut(auth);
+                  }
                   setLoggedIn(false);
                   setUserName('');
+                  setIsTestMode(false);
                   setShowDropdown(false);
                   setScreen('main');
                 }}
@@ -820,12 +897,63 @@ const App = () => {
     }
   }, []);
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    // Skip validation - go straight to logged in state
-    setLoggedIn(true);
-    setUserName('Sonya');
+  const handleEmailAuth = async (e) => {
+    if (e) e.preventDefault();
+    setAuthError('');
+    if (!email || !password) {
+      setAuthError('Please enter both email and password.');
+      return;
+    }
+    if (password.length < 6) {
+      setAuthError('Password must be at least 6 characters.');
+      return;
+    }
+    try {
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+      // onAuthStateChanged will handle setting loggedIn
+    } catch (err) {
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+        setAuthError('No account found with that email. Try signing up instead.');
+      } else if (err.code === 'auth/wrong-password') {
+        setAuthError('Incorrect password. Please try again.');
+      } else if (err.code === 'auth/email-already-in-use') {
+        setAuthError('An account with that email already exists. Try logging in.');
+      } else if (err.code === 'auth/invalid-email') {
+        setAuthError('Please enter a valid email address.');
+      } else {
+        setAuthError(err.message);
+      }
+    }
   };
+
+  const handleGoogleSignIn = async () => {
+    setAuthError('');
+    try {
+      await signInWithPopup(auth, googleProvider);
+      // onAuthStateChanged will handle setting loggedIn
+    } catch (err) {
+      if (err.code !== 'auth/popup-closed-by-user') {
+        setAuthError('Google sign-in failed. Please try again.');
+      }
+    }
+  };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-rose-400 to-orange-400 rounded-3xl mb-4 shadow-lg animate-pulse">
+            <Heart className="w-8 h-8 text-white" fill="white" />
+          </div>
+          <p className="text-slate-500">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (loggedIn) {
     if (screen === 'requestDetail' && selectedRequest) {
@@ -869,14 +997,25 @@ const App = () => {
                   <h3 className="text-2xl font-bold text-slate-800 mb-2" style={{ fontFamily: 'Georgia, serif' }}>
                     {selectedRequest.title}
                   </h3>
-                  <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${
-                    selectedRequest.urgency === 'critical' ? 'bg-red-100 text-red-700' :
-                    selectedRequest.urgency === 'high' ? 'bg-orange-100 text-orange-700' :
-                    selectedRequest.urgency === 'medium' ? 'bg-amber-100 text-amber-700' :
-                    'bg-green-100 text-green-700'
-                  }`}>
-                    {selectedRequest.urgency.toUpperCase()} PRIORITY
-                  </span>
+                  {selectedRequest.category && (
+                    <span className="inline-block px-3 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700">
+                      {selectedRequest.category === 'errand' ? '🛒 Errand' :
+                       selectedRequest.category === 'favor' ? '🙏 Favor' :
+                       selectedRequest.category === 'home-help' ? '🏠 Home Help' :
+                       selectedRequest.category === 'companionship' ? '💛 Check-in' :
+                       selectedRequest.category}
+                    </span>
+                  )}
+                  {selectedRequest.urgency && !selectedRequest.category && (
+                    <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${
+                      selectedRequest.urgency === 'critical' ? 'bg-red-100 text-red-700' :
+                      selectedRequest.urgency === 'high' ? 'bg-orange-100 text-orange-700' :
+                      selectedRequest.urgency === 'medium' ? 'bg-amber-100 text-amber-700' :
+                      'bg-green-100 text-green-700'
+                    }`}>
+                      {selectedRequest.urgency.toUpperCase()} PRIORITY
+                    </span>
+                  )}
                 </div>
 
                 <div className="bg-slate-50 rounded-2xl p-4 space-y-3">
@@ -913,27 +1052,32 @@ const App = () => {
                 <div>
                   {selectedRequest.helperConfirmed ? (
                     <div className="bg-blue-50 rounded-2xl p-4 mb-4 border-2 border-blue-200">
-                      <p className="text-sm text-blue-900 font-semibold mb-1">✓ You marked this as complete</p>
+                      <p className="text-sm text-blue-900 font-semibold mb-1">✓ You confirmed this is complete</p>
                       <p className="text-sm text-blue-800">
-                        Waiting for {selectedRequest.userName} to confirm completion...
+                        Waiting for {selectedRequest.userName} to confirm...
                       </p>
                     </div>
-                  ) : (
+                  ) : selectedRequest.requesterConfirmed ? (
                     <>
-                      {selectedRequest.requesterConfirmed && (
-                        <div className="bg-green-50 rounded-2xl p-4 mb-4 border-2 border-green-200">
-                          <p className="text-sm text-green-900 font-semibold">
-                            {selectedRequest.userName} has marked this as complete. Please confirm once you've provided the help!
-                          </p>
-                        </div>
-                      )}
+                      <div className="bg-green-50 rounded-2xl p-4 mb-4 border-2 border-green-200">
+                        <p className="text-sm text-green-900 font-semibold">
+                          {selectedRequest.userName} has marked this as complete!
+                        </p>
+                      </div>
                       <button
                         onClick={() => handleMarkComplete(true)}
                         className="w-full bg-gradient-to-r from-green-400 to-emerald-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all mb-3"
                       >
-                        Mark as Complete
+                        Confirm Completion
                       </button>
                     </>
+                  ) : (
+                    <button
+                      onClick={() => handleMarkComplete(true)}
+                      className="w-full bg-gradient-to-r from-green-400 to-emerald-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all mb-3"
+                    >
+                      Mark as Complete
+                    </button>
                   )}
 
                   <div className="bg-amber-50 rounded-2xl p-4 mb-4 border-2 border-amber-200">
@@ -985,23 +1129,31 @@ const App = () => {
                     <p className="text-sm text-green-900 mb-2">
                       <span className="font-semibold">{selectedRequest.acceptedBy}</span> has accepted your request!
                     </p>
-                    {selectedRequest.requesterConfirmed ? (
-                      <p className="text-sm text-green-800 font-semibold">
-                        ✓ You marked this as complete. Waiting for {selectedRequest.acceptedBy} to confirm...
-                      </p>
-                    ) : selectedRequest.helperConfirmed ? (
-                      <p className="text-sm text-green-800 font-semibold">
-                        {selectedRequest.acceptedBy} has marked this as complete. Please confirm once the help is provided!
-                      </p>
-                    ) : (
-                      <p className="text-sm text-green-800">
-                        Once they've helped you, mark this request as complete.
-                      </p>
-                    )}
                   </div>
-                  
-                  {!selectedRequest.requesterConfirmed && (
-                    <button 
+
+                  {selectedRequest.requesterConfirmed ? (
+                    <div className="bg-blue-50 rounded-2xl p-4 mb-4 border-2 border-blue-200">
+                      <p className="text-sm text-blue-900 font-semibold mb-1">✓ You confirmed this is complete</p>
+                      <p className="text-sm text-blue-800">
+                        Waiting for {selectedRequest.acceptedBy} to confirm...
+                      </p>
+                    </div>
+                  ) : selectedRequest.helperConfirmed ? (
+                    <>
+                      <div className="bg-green-50 rounded-2xl p-4 mb-4 border-2 border-green-200">
+                        <p className="text-sm text-green-900 font-semibold">
+                          {selectedRequest.acceptedBy} has marked this as complete!
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleMarkComplete(false)}
+                        className="w-full bg-gradient-to-r from-green-400 to-emerald-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all"
+                      >
+                        Confirm Completion
+                      </button>
+                    </>
+                  ) : (
+                    <button
                       onClick={() => handleMarkComplete(false)}
                       className="w-full bg-gradient-to-r from-green-400 to-emerald-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all"
                     >
@@ -1148,7 +1300,7 @@ const App = () => {
                     Request Limit Reached
                   </h2>
                   <p className="text-slate-600 text-sm">
-                    You've reached the maximum number of requests you can make right now. You need to give back to the community before posting again.
+                    You've used {myRequestCount} of {requestsAllowed} requests. Give back to the community to unlock more!
                   </p>
                 </div>
                 <div className="space-y-3">
@@ -1375,7 +1527,7 @@ const App = () => {
                     title: '',
                     description: '',
                     neighborhood: userProfile.neighborhood,
-                    urgency: 'medium',
+                    category: '',
                     dateNeeded: '',
                     isDateRange: false,
                     endDate: '',
@@ -1400,9 +1552,48 @@ const App = () => {
             <div className="bg-white rounded-3xl shadow-xl p-6">
               <div className="space-y-5">
                 <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">What kind of help do you need? *</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { value: 'errand', label: 'Errand', icon: '🛒', desc: 'Prescription pickup, grocery run, ride to appointment' },
+                      { value: 'favor', label: 'Favor', icon: '🙏', desc: 'A one-off ask that doesn\'t fit the other categories' },
+                      { value: 'home-help', label: 'Home Help', icon: '🏠', desc: 'A one-off task you can\'t do right now' },
+                      { value: 'companionship', label: 'Check-in', icon: '💛', desc: 'Phone call, text, or someone to stop by' }
+                    ].map(cat => (
+                      <button
+                        key={cat.value}
+                        type="button"
+                        onClick={() => setRequestForm({ ...requestForm, category: cat.value })}
+                        className={`p-3 rounded-xl text-left transition-all border-2 ${
+                          requestForm.category === cat.value
+                            ? 'border-rose-400 bg-rose-50 shadow-md'
+                            : 'border-slate-200 bg-white hover:border-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-lg">{cat.icon}</span>
+                          <span className="font-semibold text-slate-800 text-sm">{cat.label}</span>
+                        </div>
+                        <p className="text-xs text-slate-500">{cat.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                  {requestForm.category === 'errand' && (
+                    <p className="text-xs text-slate-400 mt-2 italic">Errands should be quick — 30 minutes or less. IGY is for neighbors helping neighbors, not a delivery or errand service.</p>
+                  )}
+                  {requestForm.category === 'home-help' && (
+                    <p className="text-xs text-slate-400 mt-2 italic">Not a cleaning or maintenance service — just a one-off task you physically can't do right now.</p>
+                  )}
+                  {requestForm.category === 'companionship' && (
+                    <p className="text-xs text-slate-400 mt-2 italic">A friendly check-in from a neighbor — not a substitute for professional support. If you're in crisis, please call <span className="font-semibold">988</span>.</p>
+                  )}
+                </div>
+
+                {requestForm.category && (<>
+                <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Title *</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={requestForm.title}
                     onChange={(e) => setRequestForm({ ...requestForm, title: e.target.value })}
                     className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
@@ -1413,7 +1604,7 @@ const App = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Description *</label>
-                  <textarea 
+                  <textarea
                     value={requestForm.description}
                     onChange={(e) => setRequestForm({ ...requestForm, description: e.target.value })}
                     className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors h-32 resize-none"
@@ -1424,7 +1615,7 @@ const App = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Neighborhood *</label>
-                  <select 
+                  <select
                     value={requestForm.neighborhood}
                     onChange={(e) => setRequestForm({ ...requestForm, neighborhood: e.target.value })}
                     className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
@@ -1434,37 +1625,6 @@ const App = () => {
                       <option key={n} value={n}>{n}</option>
                     ))}
                   </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Urgency *</label>
-                  <div className="grid grid-cols-4 gap-3">
-                    {[
-                      { value: 'low', label: 'Low' },
-                      { value: 'medium', label: 'Medium' },
-                      { value: 'high', label: 'High' },
-                      { value: 'critical', label: 'Critical' }
-                    ].map(level => (
-                      <button
-                        key={level.value}
-                        type="button"
-                        onClick={() => setRequestForm({ ...requestForm, urgency: level.value })}
-                        className={`py-3 rounded-xl font-medium capitalize transition-all ${
-                          requestForm.urgency === level.value
-                            ? level.value === 'critical' 
-                              ? 'bg-red-500 text-white shadow-md'
-                              : level.value === 'high'
-                              ? 'bg-orange-500 text-white shadow-md'
-                              : level.value === 'medium'
-                              ? 'bg-amber-500 text-white shadow-md'
-                              : 'bg-green-500 text-white shadow-md'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        {level.label}
-                      </button>
-                    ))}
-                  </div>
                 </div>
 
                 <div>
@@ -1518,12 +1678,13 @@ const App = () => {
                   <p className="text-xs text-slate-500 mt-1">Specify if you need help at a specific time (e.g., appointment pickup)</p>
                 </div>
 
-                <button 
+                <button
                   onClick={handleCreateRequest}
                   className="w-full bg-gradient-to-r from-rose-400 to-orange-400 text-white py-4 rounded-xl font-semibold hover:shadow-lg transition-all"
                 >
                   Post Request
                 </button>
+                </>)}
               </div>
             </div>
           </div>
@@ -1782,10 +1943,14 @@ const App = () => {
                 Edit Profile
               </button>
 
-              <button 
+              <button
                 onClick={() => {
+                  if (firebaseUser && !isTestMode) {
+                    signOut(auth);
+                  }
                   setLoggedIn(false);
                   setUserName('');
+                  setIsTestMode(false);
                   setScreen('main');
                 }}
                 className="w-full bg-slate-100 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-all"
@@ -1945,8 +2110,8 @@ const App = () => {
                     New
                   </button>
                 </div>
-                
-                {/* Active Requests */}
+
+                {/* Active Requests — action-needed first (accepted with requesterConfirmed pending), then by date */}
                 <h4 className="text-sm font-semibold text-slate-600 mb-2">Active</h4>
                 {postedRequests.filter(r => r.userName === userProfile.nickname && r.status !== 'completed').length === 0 ? (
                   <div className="bg-white rounded-2xl p-6 text-center shadow-sm mb-4">
@@ -1954,7 +2119,16 @@ const App = () => {
                   </div>
                 ) : (
                   <div className="space-y-3 mb-6">
-                    {postedRequests.filter(r => r.userName === userProfile.nickname && r.status !== 'completed').map(request => (
+                    {postedRequests.filter(r => r.userName === userProfile.nickname && r.status !== 'completed')
+                      .sort((a, b) => {
+                        // Action-needed items first (accepted with helper confirmed, waiting for requester)
+                        const aAction = a.status === 'accepted' && a.helperConfirmed && !a.requesterConfirmed ? 1 : 0;
+                        const bAction = b.status === 'accepted' && b.helperConfirmed && !b.requesterConfirmed ? 1 : 0;
+                        if (bAction !== aAction) return bAction - aAction;
+                        // Then reverse chronological
+                        return new Date(b.postedAt) - new Date(a.postedAt);
+                      })
+                      .map(request => (
                       <div 
                         key={request.id} 
                         onClick={() => {
@@ -1966,13 +2140,12 @@ const App = () => {
                       >
                         <div className="flex items-start justify-between mb-3">
                           <h4 className="font-bold text-slate-800 text-lg flex-1">{request.title}</h4>
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold flex-shrink-0 ml-2 ${
-                            request.urgency === 'critical' ? 'bg-red-100 text-red-700' :
-                            request.urgency === 'high' ? 'bg-orange-100 text-orange-700' :
-                            request.urgency === 'medium' ? 'bg-amber-100 text-amber-700' :
-                            'bg-green-100 text-green-700'
-                          }`}>
-                            {request.urgency}
+                          <span className="px-3 py-1 rounded-full text-xs font-semibold flex-shrink-0 ml-2 bg-rose-50 text-rose-700">
+                            {request.category === 'errand' ? '🛒 Errand' :
+                             request.category === 'favor' ? '🙏 Favor' :
+                             request.category === 'home-help' ? '🏠 Home Help' :
+                             request.category === 'companionship' ? '💛 Check-in' :
+                             request.urgency || request.category}
                           </span>
                         </div>
                         <p className="text-slate-600 text-sm mb-3">{request.description}</p>
@@ -2011,7 +2184,9 @@ const App = () => {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {completedRequests.filter(r => r.userName === userProfile.nickname).map(request => (
+                    {completedRequests.filter(r => r.userName === userProfile.nickname)
+                      .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+                      .map(request => (
                       <div key={request.id} className="bg-white rounded-2xl p-5 shadow-sm border-2 border-slate-200">
                         <div className="flex items-start justify-between mb-3">
                           <h4 className="font-bold text-slate-800 flex-1">{request.title}</h4>
@@ -2079,7 +2254,17 @@ const App = () => {
                   </div>
                 ) : (
                   <div className="space-y-3 mb-6">
-                    {helpingRequests.filter(r => r.acceptedBy === userProfile.nickname).map(request => {
+                    {helpingRequests.filter(r => r.acceptedBy === userProfile.nickname)
+                      .sort((a, b) => {
+                        const liveA = postedRequests.find(r => r.id === a.id) || a;
+                        const liveB = postedRequests.find(r => r.id === b.id) || b;
+                        // Action-needed first (requester confirmed, helper hasn't)
+                        const aAction = (liveA.requesterConfirmed || a.requesterConfirmed) && !(liveA.helperConfirmed || a.helperConfirmed) ? 1 : 0;
+                        const bAction = (liveB.requesterConfirmed || b.requesterConfirmed) && !(liveB.helperConfirmed || b.helperConfirmed) ? 1 : 0;
+                        if (bAction !== aAction) return bAction - aAction;
+                        return new Date(b.acceptedAt || 0) - new Date(a.acceptedAt || 0);
+                      })
+                      .map(request => {
                       // Look up live status from postedRequests (globally synced) so we
                       // immediately reflect when the requestor confirms, without waiting
                       // for helpingRequests to be updated from the other tab.
@@ -2177,7 +2362,9 @@ const App = () => {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {completedRequests.filter(r => r.acceptedBy === userProfile.nickname).map(request => (
+                    {completedRequests.filter(r => r.acceptedBy === userProfile.nickname)
+                      .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+                      .map(request => (
                       <div key={request.id} className="bg-white rounded-2xl p-5 shadow-sm border-2 border-slate-200">
                         <div className="flex items-start justify-between mb-3">
                           <h4 className="font-bold text-slate-800 flex-1">{request.title}</h4>
@@ -2213,7 +2400,9 @@ const App = () => {
                               </button>
                             );
                           } else if (!theirReview) {
-                            return <p className="mt-2 text-xs text-slate-400">✓ Review submitted — waiting for {request.userName}</p>;
+                            return (
+                              <p className="mt-2 text-xs text-slate-400">✓ Review submitted — waiting for {request.userName}</p>
+                            );
                           } else if (!myReview.skipped && !theirReview.skipped) {
                             return (
                               <div className="flex items-center gap-1 mt-2">
@@ -2263,7 +2452,16 @@ const App = () => {
                           <p className="text-sm text-slate-500">{request.userName}</p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-slate-500 ml-13">
+                      <div className="flex items-center gap-3 text-xs text-slate-500 ml-13 flex-wrap">
+                        {request.category && (
+                          <span className="px-2 py-0.5 rounded-full font-semibold bg-rose-50 text-rose-700">
+                            {request.category === 'errand' ? '🛒 Errand' :
+                             request.category === 'favor' ? '🙏 Favor' :
+                             request.category === 'home-help' ? '🏠 Home Help' :
+                             request.category === 'companionship' ? '💛 Check-in' :
+                             request.category}
+                          </span>
+                        )}
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3.5 h-3.5" />
                           {request.neighborhood}
@@ -2359,7 +2557,7 @@ const App = () => {
                   Request Limit Reached
                 </h2>
                 <p className="text-slate-600 text-sm">
-                  You've reached the maximum number of requests you can make right now. You need to give back to the community before posting again.
+                  You've used {myRequestCount} of {requestsAllowed} requests. Give back to the community to unlock more!
                 </p>
               </div>
               <div className="space-y-3">
@@ -2423,100 +2621,136 @@ const App = () => {
         {showReviewModal && reviewTarget && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-3xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
-              <div className="text-center mb-4">
-                <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-orange-400 rounded-full flex items-center justify-center mx-auto mb-3">
-                  <span className="text-white font-bold text-2xl">{reviewTarget.revieweeName[0].toUpperCase()}</span>
-                </div>
-                <h3 className="text-xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>
-                  How was your experience with {reviewTarget.revieweeName}?
-                </h3>
-                <p className="text-slate-500 text-sm mt-1">For: {reviewTarget.requestTitle}</p>
-              </div>
+              {showReviewConfirmation ? (
+                /* Confirmation Screen */
+                <div className="text-center py-4">
+                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Check className="w-8 h-8 text-green-600" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-800 mb-2" style={{ fontFamily: 'Georgia, serif' }}>
+                    Review Submitted!
+                  </h3>
+                  <p className="text-slate-500 text-sm mb-6">
+                    Thank you for your feedback. Your review will be visible once {reviewTarget.revieweeName} submits theirs.
+                  </p>
 
-              {/* Star Rating */}
-              <div className="flex justify-center gap-2 mb-4">
-                {[1, 2, 3, 4, 5].map(star => (
-                  <button
-                    key={star}
-                    onClick={() => setReviewStars(star)}
-                    className="p-1 transition-transform hover:scale-110"
-                  >
-                    <Star
-                      className={`w-8 h-8 ${star <= reviewStars ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
-                    />
-                  </button>
-                ))}
-              </div>
-              {reviewStars > 0 && (
-                <p className="text-center text-sm text-slate-500 mb-4">
-                  {reviewStars === 1 ? 'Poor' : reviewStars === 2 ? 'Fair' : reviewStars === 3 ? 'Good' : reviewStars === 4 ? 'Great' : 'Excellent'}
-                </p>
-              )}
-
-              {/* Review Title */}
-              <input
-                type="text"
-                value={reviewTitle}
-                onChange={(e) => setReviewTitle(e.target.value.slice(0, 50))}
-                placeholder="Review headline (required)"
-                className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors mb-1 text-sm"
-              />
-              <p className="text-xs text-slate-400 text-right mb-3">{reviewTitle.length}/50</p>
-
-              {/* Review Text */}
-              <textarea
-                value={reviewText}
-                onChange={(e) => setReviewText(e.target.value.slice(0, 500))}
-                placeholder="Share your experience (optional)"
-                rows={3}
-                className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors text-sm resize-none mb-1"
-              />
-              <p className="text-xs text-slate-400 text-right mb-3">{reviewText.length}/500</p>
-
-              {/* Tags */}
-              <div className="mb-5">
-                <p className="text-sm font-semibold text-slate-700 mb-2">Tags (optional)</p>
-                <div className="flex flex-wrap gap-2">
-                  {(reviewTarget.role === 'requester' ? HELPER_TAGS : REQUESTER_TAGS).map(tag => (
+                  <div className="space-y-3">
                     <button
-                      key={tag}
-                      onClick={() => setReviewTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                        reviewTags.includes(tag)
-                          ? 'bg-gradient-to-r from-rose-400 to-orange-400 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      onClick={() => {
+                        handleReviewConfirmationClose();
+                        setScreen('profile');
+                      }}
+                      className="w-full bg-gradient-to-r from-rose-400 to-orange-400 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition-all"
+                    >
+                      View My Profile
+                    </button>
+                    <button
+                      onClick={handleReviewConfirmationClose}
+                      className="w-full bg-slate-100 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-all"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Review Form */
+                <>
+                  <div className="text-center mb-4">
+                    <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-orange-400 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <span className="text-white font-bold text-2xl">{reviewTarget.revieweeName[0].toUpperCase()}</span>
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>
+                      How was your experience with {reviewTarget.revieweeName}?
+                    </h3>
+                    <p className="text-slate-500 text-sm mt-1">For: {reviewTarget.requestTitle}</p>
+                  </div>
+
+                  {/* Star Rating */}
+                  <div className="flex justify-center gap-2 mb-4">
+                    {[1, 2, 3, 4, 5].map(star => (
+                      <button
+                        key={star}
+                        onClick={() => setReviewStars(star)}
+                        className="p-1 transition-transform hover:scale-110"
+                      >
+                        <Star
+                          className={`w-8 h-8 ${star <= reviewStars ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                  {reviewStars > 0 && (
+                    <p className="text-center text-sm text-slate-500 mb-4">
+                      {reviewStars === 1 ? 'Poor' : reviewStars === 2 ? 'Fair' : reviewStars === 3 ? 'Good' : reviewStars === 4 ? 'Great' : 'Excellent'}
+                    </p>
+                  )}
+
+                  {/* Review Title */}
+                  <input
+                    type="text"
+                    value={reviewTitle}
+                    onChange={(e) => setReviewTitle(e.target.value.slice(0, 50))}
+                    placeholder="Review headline (required)"
+                    className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors mb-1 text-sm"
+                  />
+                  <p className="text-xs text-slate-400 text-right mb-3">{reviewTitle.length}/50</p>
+
+                  {/* Review Text */}
+                  <textarea
+                    value={reviewText}
+                    onChange={(e) => setReviewText(e.target.value.slice(0, 500))}
+                    placeholder="Share your experience (optional)"
+                    rows={3}
+                    className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors text-sm resize-none mb-1"
+                  />
+                  <p className="text-xs text-slate-400 text-right mb-3">{reviewText.length}/500</p>
+
+                  {/* Tags */}
+                  <div className="mb-5">
+                    <p className="text-sm font-semibold text-slate-700 mb-2">Tags (optional)</p>
+                    <div className="flex flex-wrap gap-2">
+                      {(reviewTarget.role === 'requester' ? HELPER_TAGS : REQUESTER_TAGS).map(tag => (
+                        <button
+                          key={tag}
+                          onClick={() => setReviewTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                            reviewTags.includes(tag)
+                              ? 'bg-gradient-to-r from-rose-400 to-orange-400 text-white'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Buttons */}
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handleSkipReview}
+                      className="flex-1 bg-slate-100 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-all"
+                    >
+                      Skip
+                    </button>
+                    <button
+                      onClick={handleSubmitReview}
+                      disabled={reviewStars === 0 || !reviewTitle.trim()}
+                      className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
+                        reviewStars > 0 && reviewTitle.trim()
+                          ? 'bg-gradient-to-r from-rose-400 to-orange-400 text-white hover:shadow-lg'
+                          : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                       }`}
                     >
-                      {tag}
+                      Submit Review
                     </button>
-                  ))}
-                </div>
-              </div>
+                  </div>
 
-              {/* Buttons */}
-              <div className="flex gap-3">
-                <button
-                  onClick={handleSkipReview}
-                  className="flex-1 bg-slate-100 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-all"
-                >
-                  Skip
-                </button>
-                <button
-                  onClick={handleSubmitReview}
-                  disabled={reviewStars === 0 || !reviewTitle.trim()}
-                  className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
-                    reviewStars > 0 && reviewTitle.trim()
-                      ? 'bg-gradient-to-r from-rose-400 to-orange-400 text-white hover:shadow-lg'
-                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                  }`}
-                >
-                  Submit Review
-                </button>
-              </div>
-
-              <p className="text-xs text-slate-400 text-center mt-3">
-                Reviews are revealed after both parties submit
-              </p>
+                  <p className="text-xs text-slate-400 text-center mt-3">
+                    Reviews are revealed after both parties submit
+                  </p>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -2537,110 +2771,82 @@ const App = () => {
         </div>
 
         <div className="bg-white rounded-3xl shadow-xl p-8 mb-4">
+          {/* Google sign-in */}
+          <button
+            onClick={handleGoogleSignIn}
+            className="w-full bg-white border-2 border-slate-200 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-50 transition-colors flex items-center justify-center gap-3 mb-4"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+            </svg>
+            Continue with Google
+          </button>
+
+          <div className="relative mb-4">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-200"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-4 bg-white text-slate-500">Or use email</span>
+            </div>
+          </div>
+
+          {/* Email/password form */}
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">Email</label>
-              <input 
-                type="email" 
-                value={email} 
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors" 
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => { setEmail(e.target.value); setAuthError(''); }}
+                className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
                 autoComplete="email"
+                placeholder="you@email.com"
               />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">Password</label>
-              <input 
-                type="password" 
-                value={password} 
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors" 
-                autoComplete="current-password"
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setAuthError(''); }}
+                className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
+                placeholder={isSignUp ? 'Create a password (6+ characters)' : 'Your password'}
               />
             </div>
-            <button 
-              onClick={() => {
-                setLoggedIn(true);
-                setUserName('Sonya');
-              }}
+
+            {authError && (
+              <div className="flex items-start gap-2 p-3 bg-red-50 rounded-xl">
+                <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-red-700">{authError}</p>
+              </div>
+            )}
+
+            <button
+              onClick={handleEmailAuth}
               className="w-full bg-gradient-to-r from-rose-400 to-orange-400 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition-all"
             >
-              Log In
+              {isSignUp ? 'Create Account' : 'Log In'}
             </button>
           </div>
 
-          <div className="mt-6">
-            <div className="relative mb-4">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-200"></div>
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-4 bg-white text-slate-500">Or continue with</span>
-              </div>
-            </div>
-            <button 
-              type="button"
-              className="w-full bg-white border-2 border-slate-200 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-50 transition-colors mb-2"
-            >
-              Google
-            </button>
-            <button 
-              type="button"
-              className="w-full bg-black text-white py-3 rounded-xl font-semibold hover:bg-slate-800 transition-colors"
-            >
-              Apple
-            </button>
-          </div>
-        </div>
-
-        <div className="text-center mb-4">
-          <button type="button" className="text-slate-600 hover:text-slate-800 font-medium">
-            Don't have an account? <span className="text-rose-500">Sign up</span>
-          </button>
-        </div>
-
-        <div className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 text-sm">
-          <p className="font-semibold text-blue-900 mb-3 text-center">Quick Test Login</p>
-          <div className="flex gap-2 mb-3">
+          <div className="text-center mt-4">
             <button
-              onClick={() => {
-                setUserProfile({
-                  nickname: 'Sonya',
-                  ageRange: '30-39',
-                  gender: 'Female',
-                  email: 'sonya@gmail.com',
-                  neighborhood: 'Ballard',
-                  phone: '206-555-0123',
-                  bio: 'Love helping my community!'
-                });
-                setLoggedIn(true);
-                setUserName('Sonya');
-              }}
-              className="flex-1 bg-white text-blue-700 py-2 px-3 rounded-lg font-semibold hover:bg-blue-100 transition-all"
+              onClick={() => { setIsSignUp(!isSignUp); setAuthError(''); }}
+              className="text-slate-600 hover:text-slate-800 font-medium text-sm"
             >
-              Sonya
-            </button>
-            <button
-              onClick={() => {
-                setUserProfile({
-                  nickname: 'Jane Smith',
-                  ageRange: '40-49',
-                  gender: 'Female',
-                  email: 'jane.smith@email.com',
-                  neighborhood: 'Capitol Hill',
-                  phone: '206-555-0199',
-                  bio: 'New to Seattle, grateful for this community!'
-                });
-                setLoggedIn(true);
-                setUserName('Jane Smith');
-              }}
-              className="flex-1 bg-white text-rose-700 py-2 px-3 rounded-lg font-semibold hover:bg-rose-100 transition-all"
-            >
-              Jane
+              {isSignUp
+                ? 'Already have an account? '
+                : "Don't have an account? "}
+              <span className="text-rose-500">{isSignUp ? 'Log in' : 'Sign up'}</span>
             </button>
           </div>
-          <p className="text-xs text-blue-700 text-center">Sonya = Helper | Jane = Requestor</p>
         </div>
+
       </div>
     </div>
   );
