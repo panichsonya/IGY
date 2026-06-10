@@ -22,7 +22,12 @@ const App = () => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [isTestMode, setIsTestMode] = useState(false);
   const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
-  const [screen, setScreen] = useState('main'); // 'main', 'profile', 'editProfile', 'newRequest', or 'requestDetail'
+  const [needsLegalAcceptance, setNeedsLegalAcceptance] = useState(false);
+  const [showLegalBanner, setShowLegalBanner] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [agreedToPrivacy, setAgreedToPrivacy] = useState(false);
+  const [agreedToLiability, setAgreedToLiability] = useState(false);
+  const [screen, setScreen] = useState('main'); // 'main', 'profile', 'editProfile', 'newRequest', 'requestDetail', or 'about'
   const [activeTab, setActiveTab] = useState('community'); // 'community' or 'myActivity'
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [showAcceptModal, setShowAcceptModal] = useState(false);
@@ -166,6 +171,9 @@ const App = () => {
           setEditForm(profile);
           setUserName(profile.nickname || displayName);
           if (profile.overrideUsed) setOverrideUsed(true);
+          if (!profile.termsAcceptedAt) {
+            setShowLegalBanner(true);
+          }
         } else {
           // New user — needs profile setup
           const newProfile = {
@@ -181,6 +189,7 @@ const App = () => {
           setUserProfile(newProfile);
           setEditForm(newProfile);
           setUserName(displayName);
+          setNeedsLegalAcceptance(true);
           setNeedsProfileSetup(true);
         }
         setLoggedIn(true);
@@ -620,6 +629,59 @@ const App = () => {
     </div>
   );
 
+  const Footer = () => (
+    <footer className="max-w-2xl mx-auto px-4 py-6 mt-8 border-t border-slate-200">
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-slate-400">
+        <a href="/terms-of-service.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-600 transition-colors">Terms of Service</a>
+        <span>·</span>
+        <a href="/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-600 transition-colors">Privacy Policy</a>
+        <span>·</span>
+        <button onClick={() => setScreen('about')} className="hover:text-slate-600 transition-colors">About</button>
+        <span>·</span>
+        <span>&copy; 2026 IGY</span>
+      </div>
+    </footer>
+  );
+
+  const LegalBanner = () => {
+    if (!showLegalBanner) return null;
+    const handleBannerAccept = async () => {
+      const legalData = {
+        termsAcceptedAt: serverTimestamp(),
+        termsVersion: '1.0',
+        privacyAcceptedAt: serverTimestamp(),
+        privacyVersion: '1.0',
+        liabilityAcknowledgedAt: serverTimestamp()
+      };
+      if (firebaseUser && !isTestMode) {
+        await setDoc(doc(db, 'profiles', firebaseUser.uid), legalData, { merge: true });
+      }
+      const now = new Date().toISOString();
+      setUserProfile(prev => ({ ...prev, termsAcceptedAt: now, termsVersion: '1.0', privacyAcceptedAt: now, privacyVersion: '1.0', liabilityAcknowledgedAt: now }));
+      setShowLegalBanner(false);
+    };
+    return (
+      <div className="max-w-2xl mx-auto px-4 mt-4">
+        <div className="bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-amber-800">Please review and accept our updated Terms of Service</p>
+            <p className="text-xs text-amber-600 mt-1">
+              <a href="/terms-of-service.html" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-800">Terms of Service</a>
+              {' · '}
+              <a href="/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-800">Privacy Policy</a>
+            </p>
+          </div>
+          <button
+            onClick={handleBannerAccept}
+            className="px-4 py-2 bg-gradient-to-r from-rose-400 to-orange-400 text-white text-sm font-semibold rounded-xl hover:shadow-lg transition-all whitespace-nowrap"
+          >
+            I Accept
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   // Profile is now loaded from Firestore in the auth state listener
   useState(() => {
   }, []);
@@ -677,6 +739,90 @@ const App = () => {
             <Heart className="w-8 h-8 text-white" fill="white" />
           </div>
           <p className="text-slate-500">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loggedIn && needsLegalAcceptance) {
+    const handleAcceptLegal = async () => {
+      const legalData = {
+        termsAcceptedAt: serverTimestamp(),
+        termsVersion: '1.0',
+        privacyAcceptedAt: serverTimestamp(),
+        privacyVersion: '1.0',
+        liabilityAcknowledgedAt: serverTimestamp()
+      };
+      if (firebaseUser && !isTestMode) {
+        await setDoc(doc(db, 'profiles', firebaseUser.uid), legalData, { merge: true });
+      }
+      const now = new Date().toISOString();
+      setUserProfile(prev => ({ ...prev, termsAcceptedAt: now, termsVersion: '1.0', privacyAcceptedAt: now, privacyVersion: '1.0', liabilityAcknowledgedAt: now }));
+      setNeedsLegalAcceptance(false);
+    };
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50 flex items-center justify-center px-4">
+        <div className="max-w-md w-full">
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-rose-400 to-orange-400 rounded-3xl mb-4 shadow-lg">
+              <Heart className="w-8 h-8 text-white" fill="white" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>Before we get started</h1>
+            <p className="text-slate-500 text-sm mt-2">Please review and accept our terms to continue</p>
+          </div>
+          <div className="bg-white rounded-3xl shadow-xl p-6 space-y-5">
+            <label className="flex items-start gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={agreedToTerms}
+                onChange={(e) => setAgreedToTerms(e.target.checked)}
+                className="mt-1 w-5 h-5 rounded border-slate-300 text-rose-500 focus:ring-rose-400 accent-rose-500 flex-shrink-0"
+              />
+              <span className="text-sm text-slate-700 group-hover:text-slate-900">
+                I agree to the{' '}
+                <a href="/terms-of-service.html" target="_blank" rel="noopener noreferrer" className="text-rose-500 underline hover:text-rose-600 font-medium">
+                  Terms of Service
+                </a>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={agreedToPrivacy}
+                onChange={(e) => setAgreedToPrivacy(e.target.checked)}
+                className="mt-1 w-5 h-5 rounded border-slate-300 text-rose-500 focus:ring-rose-400 accent-rose-500 flex-shrink-0"
+              />
+              <span className="text-sm text-slate-700 group-hover:text-slate-900">
+                I have read the{' '}
+                <a href="/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="text-rose-500 underline hover:text-rose-600 font-medium">
+                  Privacy Policy
+                </a>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={agreedToLiability}
+                onChange={(e) => setAgreedToLiability(e.target.checked)}
+                className="mt-1 w-5 h-5 rounded border-slate-300 text-rose-500 focus:ring-rose-400 accent-rose-500 flex-shrink-0"
+              />
+              <span className="text-sm text-slate-700 group-hover:text-slate-900">
+                I understand IGY is a peer-to-peer platform and I interact with other users at my own risk
+              </span>
+            </label>
+            <button
+              onClick={handleAcceptLegal}
+              disabled={!agreedToTerms || !agreedToPrivacy || !agreedToLiability}
+              className={`w-full py-4 rounded-xl font-semibold transition-all ${
+                agreedToTerms && agreedToPrivacy && agreedToLiability
+                  ? 'bg-gradient-to-r from-rose-400 to-orange-400 text-white hover:shadow-lg'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              Continue
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -1844,6 +1990,63 @@ const App = () => {
                 );
               })()}
             </div>
+
+            <Footer />
+          </div>
+        </div>
+      );
+    }
+
+    if (screen === 'about') {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
+          <Header showBackButton={true} onBack={() => setScreen('main')} />
+
+          <div className="max-w-2xl mx-auto px-4 py-6">
+            <div className="bg-white rounded-3xl shadow-xl p-6">
+              <div className="text-center mb-6">
+                <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-orange-400 rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-lg" style={{transform: 'rotate(3deg)'}}>
+                  <Heart className="w-8 h-8 text-white" fill="white" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>About IGY</h2>
+                <p className="text-slate-500 text-sm mt-1">I Got You</p>
+              </div>
+
+              <div className="space-y-4 mb-6">
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  IGY is a community platform where people managing health challenges can request and offer support to one another. We believe in the power of mutual aid — neighbors helping neighbors, no strings attached.
+                </p>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  Whether you need a ride to an appointment, help picking up groceries, or just someone to check in — IGY connects you with people nearby who want to help.
+                </p>
+              </div>
+
+              <div className="border-t border-slate-100 pt-5 space-y-3">
+                <h3 className="font-semibold text-slate-800 text-sm">Legal</h3>
+                <a href="/terms-of-service.html" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors">
+                  <span className="text-sm font-medium text-slate-700">Terms of Service</span>
+                  <span className="text-slate-400 text-sm">→</span>
+                </a>
+                <a href="/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors">
+                  <span className="text-sm font-medium text-slate-700">Privacy Policy</span>
+                  <span className="text-slate-400 text-sm">→</span>
+                </a>
+                {userProfile.termsAcceptedAt && (
+                  <p className="text-xs text-slate-400 pt-1">
+                    Terms accepted on {new Date(userProfile.termsAcceptedAt.seconds ? userProfile.termsAcceptedAt.seconds * 1000 : userProfile.termsAcceptedAt).toLocaleDateString()}
+                  </p>
+                )}
+              </div>
+
+              <div className="border-t border-slate-100 pt-5 mt-5 space-y-2">
+                <h3 className="font-semibold text-slate-800 text-sm">Contact</h3>
+                <p className="text-sm text-slate-600">support.igyapp@gmail.com</p>
+              </div>
+
+              <div className="border-t border-slate-100 pt-5 mt-5">
+                <p className="text-xs text-slate-400 text-center">&copy; 2026 IGY · Seattle, WA</p>
+              </div>
+            </div>
           </div>
         </div>
       );
@@ -1852,6 +2055,7 @@ const App = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
         <Header />
+        <LegalBanner />
 
         <div className="max-w-2xl mx-auto px-4 py-6">
           {/* Notifications */}
@@ -2390,6 +2594,8 @@ const App = () => {
             </div>
           </div>
         </div>
+
+        <Footer />
 
         {/* Request Limit Modal */}
         {showRequestLimitModal && (
