@@ -590,7 +590,7 @@ const App = () => {
               </div>
             </div>
             <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-700 font-semibold hover:bg-slate-200 transition-colors">
-              {userProfile.nickname[0].toUpperCase()}
+              {(userProfile.nickname || '?')[0].toUpperCase()}
             </div>
           </button>
           
@@ -1850,7 +1850,7 @@ const App = () => {
             <div className="bg-white rounded-3xl shadow-xl p-6 mb-4">
               <div className="text-center mb-6">
                 <div className="w-24 h-24 bg-gradient-to-br from-rose-400 to-orange-400 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-4xl text-white font-bold">{userProfile.nickname[0].toUpperCase()}</span>
+                  <span className="text-4xl text-white font-bold">{(userProfile.nickname || '?')[0].toUpperCase()}</span>
                 </div>
                 <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: 'Georgia, serif' }}>{userProfile.nickname}</h2>
                 <p className="text-slate-500 text-sm">{userProfile.ageRange} • {userProfile.gender}</p>
