@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Heart, MapPin, Clock, Send, Users, Star, Check, AlertCircle } from 'lucide-react';
 import { auth, googleProvider, db } from './firebase';
-import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot, getDoc, setDoc, orderBy, serverTimestamp, Timestamp } from 'firebase/firestore';
 
 const SEATTLE_NEIGHBORHOODS = [
@@ -20,6 +20,8 @@ const App = () => {
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [resetEmailSent, setResetEmailSent] = useState(false);
   const [isTestMode, setIsTestMode] = useState(false);
   const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
   const [needsLegalAcceptance, setNeedsLegalAcceptance] = useState(false);
@@ -727,6 +729,24 @@ const App = () => {
     } catch (err) {
       if (err.code !== 'auth/popup-closed-by-user') {
         setAuthError('Google sign-in failed. Please try again.');
+      }
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!email) {
+      setAuthError('Please enter your email address first.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setResetEmailSent(true);
+      setAuthError('');
+    } catch (err) {
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
+        setAuthError('No account found with that email address.');
+      } else {
+        setAuthError('Failed to send reset email. Please try again.');
       }
     }
   };
@@ -2869,6 +2889,24 @@ const App = () => {
               />
             </div>
 
+            {!isSignUp && !resetEmailSent && (
+              <div className="text-right">
+                <button
+                  onClick={handlePasswordReset}
+                  className="text-xs text-rose-500 hover:text-rose-600 font-medium"
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
+            {resetEmailSent && (
+              <div className="flex items-start gap-2 p-3 bg-green-50 rounded-xl">
+                <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-green-700">Password reset email sent! Check your inbox.</p>
+              </div>
+            )}
+
             {authError && (
               <div className="flex items-start gap-2 p-3 bg-red-50 rounded-xl">
                 <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
@@ -2886,7 +2924,7 @@ const App = () => {
 
           <div className="text-center mt-4">
             <button
-              onClick={() => { setIsSignUp(!isSignUp); setAuthError(''); }}
+              onClick={() => { setIsSignUp(!isSignUp); setAuthError(''); setResetEmailSent(false); }}
               className="text-slate-600 hover:text-slate-800 font-medium text-sm"
             >
               {isSignUp
