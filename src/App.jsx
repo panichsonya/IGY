@@ -25,7 +25,6 @@ const App = () => {
   const [isTestMode, setIsTestMode] = useState(false);
   const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
   const [needsLegalAcceptance, setNeedsLegalAcceptance] = useState(false);
-  const [showLegalBanner, setShowLegalBanner] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [agreedToPrivacy, setAgreedToPrivacy] = useState(false);
   const [agreedToLiability, setAgreedToLiability] = useState(false);
@@ -173,9 +172,6 @@ const App = () => {
           setEditForm(profile);
           setUserName(profile.nickname || displayName);
           if (profile.overrideUsed) setOverrideUsed(true);
-          if (!profile.termsAcceptedAt) {
-            setShowLegalBanner(true);
-          }
         } else {
           // New user — needs profile setup
           const newProfile = {
@@ -644,45 +640,6 @@ const App = () => {
       </div>
     </footer>
   );
-
-  const LegalBanner = () => {
-    if (!showLegalBanner) return null;
-    const handleBannerAccept = async () => {
-      const legalData = {
-        termsAcceptedAt: serverTimestamp(),
-        termsVersion: '1.0',
-        privacyAcceptedAt: serverTimestamp(),
-        privacyVersion: '1.0',
-        liabilityAcknowledgedAt: serverTimestamp()
-      };
-      if (firebaseUser && !isTestMode) {
-        await setDoc(doc(db, 'profiles', firebaseUser.uid), legalData, { merge: true });
-      }
-      const now = new Date().toISOString();
-      setUserProfile(prev => ({ ...prev, termsAcceptedAt: now, termsVersion: '1.0', privacyAcceptedAt: now, privacyVersion: '1.0', liabilityAcknowledgedAt: now }));
-      setShowLegalBanner(false);
-    };
-    return (
-      <div className="max-w-2xl mx-auto px-4 mt-4">
-        <div className="bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-amber-800">Please review and accept our updated Terms of Service</p>
-            <p className="text-xs text-amber-600 mt-1">
-              <a href="/terms-of-service.html" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-800">Terms of Service</a>
-              {' · '}
-              <a href="/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-800">Privacy Policy</a>
-            </p>
-          </div>
-          <button
-            onClick={handleBannerAccept}
-            className="px-4 py-2 bg-gradient-to-r from-rose-400 to-orange-400 text-white text-sm font-semibold rounded-xl hover:shadow-lg transition-all whitespace-nowrap"
-          >
-            I Accept
-          </button>
-        </div>
-      </div>
-    );
-  };
 
   // Profile is now loaded from Firestore in the auth state listener
   useState(() => {
@@ -2075,7 +2032,6 @@ const App = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
         <Header />
-        <LegalBanner />
 
         <div className="max-w-2xl mx-auto px-4 py-6">
           {/* Notifications */}
