@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Heart, MapPin, Clock, Send, Users, Star, Check, AlertCircle } from 'lucide-react';
 import { auth, googleProvider, db } from './firebase';
-import { onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot, getDoc, setDoc, orderBy, serverTimestamp, Timestamp } from 'firebase/firestore';
 
 const SEATTLE_NEIGHBORHOODS = [
@@ -156,11 +156,6 @@ const App = () => {
       unsubPending();
     };
   }, [loggedIn, userProfile.nickname]);
-
-  // Handle Google redirect result on page load (mobile sign-in)
-  useEffect(() => {
-    getRedirectResult(auth).catch(() => {});
-  }, []);
 
   // Firebase auth state listener — loads profile from Firestore
   useEffect(() => {
@@ -686,12 +681,7 @@ const App = () => {
   const handleGoogleSignIn = async () => {
     setAuthError('');
     try {
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      if (isMobile) {
-        await signInWithRedirect(auth, googleProvider);
-      } else {
-        await signInWithPopup(auth, googleProvider);
-      }
+      await signInWithPopup(auth, googleProvider);
       // onAuthStateChanged will handle setting loggedIn
     } catch (err) {
       if (err.code !== 'auth/popup-closed-by-user') {

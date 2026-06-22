@@ -4,7 +4,7 @@ import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBW4VKoEVyQBLibWhUa52oe-0_ibjfmrZA",
-  authDomain: "igy-app.firebaseapp.com",
+  authDomain: "igy-app.web.app",
   projectId: "igy-app",
   storageBucket: "igy-app.firebasestorage.app",
   messagingSenderId: "910915021445",
