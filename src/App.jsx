@@ -419,7 +419,7 @@ const App = () => {
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const hasGivenToday = communityGives.some(
-    g => g.userName === userProfile.nickname && g.postedAt.slice(0, 10) === todayStr
+    g => g.userName === userProfile.nickname && (typeof g.postedAt === 'string' ? g.postedAt.slice(0, 10) : '') === todayStr
   );
 
   const handleCreateGive = async () => {
@@ -1496,6 +1496,9 @@ const App = () => {
                   </div>
                 </div>
 
+                {hasGivenToday && !editingGiveId && (
+                  <p className="text-amber-600 text-sm text-center mb-2">You've already shared a positivity post today. Come back tomorrow!</p>
+                )}
                 <div className="flex gap-3 pt-2">
                   <button
                     onClick={() => { setGiveFormFromLimit(false); setEditingGiveId(null); setGiveForm({ title: '', content: '', imageUrl: '' }); setScreen('main'); }}
@@ -1503,9 +1506,6 @@ const App = () => {
                   >
                     Cancel
                   </button>
-                  {hasGivenToday && !editingGiveId && (
-                    <p className="text-amber-600 text-sm text-center w-full mb-2">You've already shared a positivity post today. Come back tomorrow!</p>
-                  )}
                   <button
                     onClick={handleCreateGive}
                     disabled={hasGivenToday && !editingGiveId}
