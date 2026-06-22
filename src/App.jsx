@@ -423,19 +423,22 @@ const App = () => {
   );
 
   const handleCreateGive = async () => {
+    console.log('handleCreateGive called', { editingGiveId, title: giveForm.title, content: giveForm.content, hasGivenToday });
     if (!giveForm.title || !giveForm.content) {
       alert('Please add a title and something to share');
       return;
     }
 
-    if (editingGiveId) {
-      await updateDoc(doc(db, 'communityGives', editingGiveId), {
-        title: giveForm.title,
-        content: giveForm.content,
-        imageUrl: giveForm.imageUrl
-      });
-      setEditingGiveId(null);
-    } else {
+    try {
+      if (editingGiveId) {
+        console.log('Updating give:', editingGiveId);
+        await updateDoc(doc(db, 'communityGives', editingGiveId), {
+          title: giveForm.title,
+          content: giveForm.content,
+          imageUrl: giveForm.imageUrl
+        });
+        setEditingGiveId(null);
+      } else {
       if (hasGivenToday) {
         alert('You can only share one positivity post per day. Come back tomorrow!');
         return;
@@ -448,15 +451,18 @@ const App = () => {
         userInitial: (userProfile.nickname || '?')[0].toUpperCase(),
         postedAt: new Date().toISOString()
       });
-    }
-    setGiveForm({ title: '', content: '', imageUrl: '' });
+      }
+      setGiveForm({ title: '', content: '', imageUrl: '' });
 
-    if (giveFormFromLimit) {
-      setGiveFormFromLimit(false);
-      setScreen('newRequest');
-    } else {
-      setScreen('main');
-      setActiveTab('community');
+      if (giveFormFromLimit) {
+        setGiveFormFromLimit(false);
+        setScreen('newRequest');
+      } else {
+        setScreen('main');
+        setActiveTab('community');
+      }
+    } catch (err) {
+      alert('Failed to save: ' + err.message);
     }
   };
 
