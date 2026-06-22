@@ -23,6 +23,7 @@ service cloud.firestore {
     match /communityGives/{giveId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null;
+      allow update: if request.auth != null;
     }
 
     match /notifications/{notifId} {
