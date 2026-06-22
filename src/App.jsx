@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Heart, MapPin, Clock, Send, Users, Star, Check, AlertCircle } from 'lucide-react';
+import Cropper from 'react-easy-crop';
 import { auth, googleProvider, db } from './firebase';
 import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot, getDoc, setDoc, orderBy, serverTimestamp, Timestamp } from 'firebase/firestore';
@@ -89,6 +90,46 @@ const App = () => {
   // Community Gives
   const [communityGives, setCommunityGives] = useState([]);
   const [giveForm, setGiveForm] = useState({ title: '', content: '', imageUrl: '' });
+  const [editingGiveId, setEditingGiveId] = useState(null);
+
+  // Image cropper state
+  const [cropImageSrc, setCropImageSrc] = useState(null);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
+
+  const onCropComplete = useCallback((croppedArea, croppedAreaPx) => {
+    setCroppedAreaPixels(croppedAreaPx);
+  }, []);
+
+  const getCroppedImage = (imageSrc, pixelCrop) => {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = pixelCrop.width;
+        canvas.height = pixelCrop.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(
+          image,
+          pixelCrop.x, pixelCrop.y, pixelCrop.width, pixelCrop.height,
+          0, 0, pixelCrop.width, pixelCrop.height
+        );
+        resolve(canvas.toDataURL('image/jpeg', 0.9));
+      };
+      image.src = imageSrc;
+    });
+  };
+
+  const handleCropConfirm = async () => {
+    if (cropImageSrc && croppedAreaPixels) {
+      const cropped = await getCroppedImage(cropImageSrc, croppedAreaPixels);
+      setGiveForm(prev => ({ ...prev, imageUrl: cropped }));
+    }
+    setCropImageSrc(null);
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+  };
 
   // Reviews (loaded from Firestore)
   const [allReviews, setAllReviews] = useState([]);
@@ -386,18 +427,28 @@ const App = () => {
       alert('Please add a title and something to share');
       return;
     }
-    if (hasGivenToday) {
-      alert('You can only share one positivity post per day. Come back tomorrow!');
-      return;
+
+    if (editingGiveId) {
+      await updateDoc(doc(db, 'communityGives', editingGiveId), {
+        title: giveForm.title,
+        content: giveForm.content,
+        imageUrl: giveForm.imageUrl
+      });
+      setEditingGiveId(null);
+    } else {
+      if (hasGivenToday) {
+        alert('You can only share one positivity post per day. Come back tomorrow!');
+        return;
+      }
+      await addDoc(collection(db, 'communityGives'), {
+        title: giveForm.title,
+        content: giveForm.content,
+        imageUrl: giveForm.imageUrl,
+        userName: userProfile.nickname,
+        userInitial: (userProfile.nickname || '?')[0].toUpperCase(),
+        postedAt: new Date().toISOString()
+      });
     }
-    await addDoc(collection(db, 'communityGives'), {
-      title: giveForm.title,
-      content: giveForm.content,
-      imageUrl: giveForm.imageUrl,
-      userName: userProfile.nickname,
-      userInitial: userProfile.nickname[0].toUpperCase(),
-      postedAt: new Date().toISOString()
-    });
     setGiveForm({ title: '', content: '', imageUrl: '' });
 
     if (giveFormFromLimit) {
@@ -1366,7 +1417,7 @@ const App = () => {
             <div className="bg-white rounded-3xl shadow-xl p-6">
               <div className="text-center mb-6">
                 <div className="text-4xl mb-2">🌟</div>
-                <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: 'Georgia, serif' }}>Share Something Positive</h2>
+                <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: 'Georgia, serif' }}>{editingGiveId ? 'Edit Your Post' : 'Share Something Positive'}</h2>
                 <p className="text-slate-500 text-sm">A little light goes a long way. Share a joke, a meme link, a kind word — anything that might brighten someone's day.</p>
               </div>
 
@@ -1427,7 +1478,9 @@ const App = () => {
                             }
                             const reader = new FileReader();
                             reader.onload = (ev) => {
-                              setGiveForm({ ...giveForm, imageUrl: ev.target.result });
+                              setCropImageSrc(ev.target.result);
+                              setCrop({ x: 0, y: 0 });
+                              setZoom(1);
                             };
                             reader.readAsDataURL(file);
                           }}
@@ -1439,26 +1492,71 @@ const App = () => {
 
                 <div className="flex gap-3 pt-2">
                   <button
-                    onClick={() => { setGiveFormFromLimit(false); setScreen('main'); }}
+                    onClick={() => { setGiveFormFromLimit(false); setEditingGiveId(null); setGiveForm({ title: '', content: '', imageUrl: '' }); setScreen('main'); }}
                     className="flex-1 bg-slate-100 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-all"
                   >
                     Cancel
                   </button>
-                  {hasGivenToday && (
+                  {hasGivenToday && !editingGiveId && (
                     <p className="text-amber-600 text-sm text-center w-full mb-2">You've already shared a positivity post today. Come back tomorrow!</p>
                   )}
                   <button
                     onClick={handleCreateGive}
-                    disabled={hasGivenToday}
-                    className={`flex-1 py-3 rounded-xl font-semibold transition-all ${hasGivenToday ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-gradient-to-r from-green-400 to-emerald-500 text-white hover:shadow-lg'}`}
+                    disabled={hasGivenToday && !editingGiveId}
+                    className={`flex-1 py-3 rounded-xl font-semibold transition-all ${hasGivenToday && !editingGiveId ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-gradient-to-r from-green-400 to-emerald-500 text-white hover:shadow-lg'}`}
                   >
-                    Share with Community
+                    {editingGiveId ? 'Save Changes' : 'Share with Community'}
                   </button>
                 </div>
 
               </div>
             </div>
           </div>
+
+          {/* Image Cropper Modal */}
+          {cropImageSrc && (
+            <div className="fixed inset-0 bg-black bg-opacity-80 z-50 flex flex-col">
+              <div className="relative flex-1">
+                <Cropper
+                  image={cropImageSrc}
+                  crop={crop}
+                  zoom={zoom}
+                  aspect={16 / 9}
+                  onCropChange={setCrop}
+                  onZoomChange={setZoom}
+                  onCropComplete={onCropComplete}
+                />
+              </div>
+              <div className="bg-white p-4 space-y-3">
+                <div className="flex items-center gap-3 px-2">
+                  <span className="text-xs text-slate-500">Zoom</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={3}
+                    step={0.1}
+                    value={zoom}
+                    onChange={(e) => setZoom(Number(e.target.value))}
+                    className="flex-1 accent-rose-500"
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => { setCropImageSrc(null); setCrop({ x: 0, y: 0 }); setZoom(1); }}
+                    className="flex-1 bg-slate-100 text-slate-700 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCropConfirm}
+                    className="flex-1 bg-gradient-to-r from-rose-400 to-orange-400 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition-all"
+                  >
+                    Use This Crop
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -2531,10 +2629,22 @@ const App = () => {
                         <div className="w-10 h-10 bg-gradient-to-br from-green-400 to-emerald-400 rounded-full flex items-center justify-center flex-shrink-0">
                           <span className="text-white font-bold text-sm">{give.userInitial}</span>
                         </div>
-                        <div>
+                        <div className="flex-1">
                           <p className="font-bold text-slate-800 text-sm">{give.userName}</p>
                           <p className="text-xs text-slate-400">{new Date(give.postedAt).toLocaleDateString()}</p>
                         </div>
+                        {give.userName === userProfile.nickname && (
+                          <button
+                            onClick={() => {
+                              setGiveForm({ title: give.title, content: give.content, imageUrl: give.imageUrl || '' });
+                              setEditingGiveId(give.id);
+                              setScreen('giveForm');
+                            }}
+                            className="text-xs text-slate-400 hover:text-slate-600 font-medium px-2 py-1 rounded-lg hover:bg-slate-100 transition-colors"
+                          >
+                            Edit
+                          </button>
+                        )}
                       </div>
                       {give.imageUrl && (
                         <div className="mb-2 rounded-xl overflow-hidden border border-slate-100">
