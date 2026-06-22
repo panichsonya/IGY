@@ -91,6 +91,7 @@ const App = () => {
   const [communityGives, setCommunityGives] = useState([]);
   const [giveForm, setGiveForm] = useState({ title: '', content: '', imageUrl: '' });
   const [editingGiveId, setEditingGiveId] = useState(null);
+  const [lightboxImage, setLightboxImage] = useState(null);
 
   // Image cropper state
   const [cropImageSrc, setCropImageSrc] = useState(null);
@@ -423,7 +424,6 @@ const App = () => {
   );
 
   const handleCreateGive = async () => {
-    console.log('handleCreateGive called', { editingGiveId, title: giveForm.title, content: giveForm.content, hasGivenToday });
     if (!giveForm.title || !giveForm.content) {
       alert('Please add a title and something to share');
       return;
@@ -431,7 +431,6 @@ const App = () => {
 
     try {
       if (editingGiveId) {
-        console.log('Updating give:', editingGiveId);
         await updateDoc(doc(db, 'communityGives', editingGiveId), {
           title: giveForm.title,
           content: giveForm.content,
@@ -2659,7 +2658,7 @@ const App = () => {
                         )}
                       </div>
                       {give.imageUrl && (
-                        <div className="mb-2 rounded-xl overflow-hidden border border-slate-100">
+                        <div className="mb-2 rounded-xl overflow-hidden border border-slate-100 cursor-pointer" onClick={() => setLightboxImage(give.imageUrl)}>
                           <img
                             src={give.imageUrl}
                             alt="Community give"
@@ -2694,6 +2693,27 @@ const App = () => {
         </div>
 
         <Footer />
+
+        {/* Image Lightbox */}
+        {lightboxImage && (
+          <div
+            className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4"
+            onClick={() => setLightboxImage(null)}
+          >
+            <button
+              onClick={() => setLightboxImage(null)}
+              className="absolute top-4 right-4 text-white text-3xl font-bold w-10 h-10 flex items-center justify-center hover:opacity-70 transition-opacity"
+            >
+              ×
+            </button>
+            <img
+              src={lightboxImage}
+              alt="Full view"
+              className="max-w-full max-h-full object-contain rounded-xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        )}
 
         {/* Request Limit Modal */}
         {showRequestLimitModal && (
