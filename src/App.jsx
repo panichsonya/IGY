@@ -1451,7 +1451,12 @@ const App = () => {
                         <img
                           src={giveForm.imageUrl}
                           alt="Preview"
-                          className="w-full max-h-48 object-cover rounded-xl border-2 border-slate-200"
+                          className="w-full max-h-48 object-cover rounded-xl border-2 border-slate-200 cursor-pointer"
+                          onClick={() => {
+                            setCropImageSrc(giveForm.imageUrl);
+                            setCrop({ x: 0, y: 0 });
+                            setZoom(1);
+                          }}
                         />
                         <button
                           onClick={() => setGiveForm({ ...giveForm, imageUrl: '' })}
@@ -1459,6 +1464,7 @@ const App = () => {
                         >
                           ×
                         </button>
+                        <span className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-xs px-2 py-1 rounded-lg">Tap to re-crop</span>
                       </div>
                     ) : (
                       <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-rose-400 hover:bg-rose-50 transition-all">
