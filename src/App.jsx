@@ -5,11 +5,19 @@ import { auth, googleProvider, db } from './firebase';
 import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot, getDoc, setDoc, orderBy, serverTimestamp, Timestamp } from 'firebase/firestore';
 
-const SEATTLE_NEIGHBORHOODS = [
-  'Ballard', 'Capitol Hill', 'Central District', 'Downtown', 'Fremont',
-  'Green Lake', 'Greenwood', 'Lake City', 'Madison Park', 'Magnolia',
-  'Queen Anne', 'Ravenna', 'University District', 'Wallingford', 'West Seattle', 'Other'
-];
+// Haversine formula: returns distance in miles between two lat/lng pairs
+const haversineDistance = (lat1, lon1, lat2, lon2) => {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 3958.8; // Earth radius in miles
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
 
 const App = () => {
   const [email, setEmail] = useState('');
@@ -56,7 +64,9 @@ const App = () => {
     ageRange: '30-39',
     gender: 'Female',
     email: 'sonya@gmail.com',
-    neighborhood: 'Ballard',
+    city: '',
+    latitude: null,
+    longitude: null,
     phone: '206-555-0123',
     bio: 'Love helping my community!'
   });
@@ -68,7 +78,9 @@ const App = () => {
   const [requestForm, setRequestForm] = useState({
     title: '',
     description: '',
-    neighborhood: 'Ballard',
+    city: '',
+    latitude: null,
+    longitude: null,
     category: '',
     dateNeeded: '',
     isDateRange: false,
@@ -98,6 +110,92 @@ const App = () => {
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
+
+  // Geolocation state
+  const [geolocating, setGeolocating] = useState(false);
+  const [geoError, setGeoError] = useState('');
+  const [feedDistanceFilter, setFeedDistanceFilter] = useState('all');
+  const [citySuggestions, setCitySuggestions] = useState([]);
+  const [showCitySuggestions, setShowCitySuggestions] = useState(false);
+  const [showManualCityInput, setShowManualCityInput] = useState(false);
+  const citySearchTimer = React.useRef(null);
+
+  const searchCities = (query) => {
+    clearTimeout(citySearchTimer.current);
+    if (query.length < 2) {
+      setCitySuggestions([]);
+      setShowCitySuggestions(false);
+      return;
+    }
+    citySearchTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=5&featuretype=city`,
+          { headers: { 'Accept-Language': 'en' } }
+        );
+        const data = await res.json();
+        const results = data.map(item => ({
+          city: item.address.city || item.address.town || item.address.village || item.name,
+          state: item.address.state || '',
+          country: item.address.country || '',
+          latitude: parseFloat(item.lat),
+          longitude: parseFloat(item.lon),
+        })).filter(item => item.city);
+        setCitySuggestions(results);
+        setShowCitySuggestions(results.length > 0);
+      } catch {
+        setCitySuggestions([]);
+        setShowCitySuggestions(false);
+      }
+    }, 300);
+  };
+
+  const autoLocate = async () => {
+    setGeolocating(true);
+    setGeoError('');
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        setGeoError('Geolocation is not supported by your browser');
+        setGeolocating(false);
+        resolve(null);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const { latitude, longitude } = position.coords;
+          try {
+            const res = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
+              { headers: { 'Accept-Language': 'en' } }
+            );
+            const data = await res.json();
+            const city =
+              data.address.city ||
+              data.address.town ||
+              data.address.village ||
+              data.address.county ||
+              '';
+            setGeolocating(false);
+            resolve({ city, latitude, longitude });
+          } catch (err) {
+            setGeoError('Could not determine your city');
+            setGeolocating(false);
+            resolve({ city: '', latitude, longitude });
+          }
+        },
+        (err) => {
+          setGeoError(
+            err.code === 1
+              ? 'Location permission denied. Please type your city manually.'
+              : 'Could not get your location. Please type your city manually.'
+          );
+          setGeolocating(false);
+          resolve(null);
+        },
+        { enableHighAccuracy: false, timeout: 10000 }
+      );
+    });
+  };
 
   const onCropComplete = useCallback((croppedArea, croppedAreaPx) => {
     setCroppedAreaPixels(croppedAreaPx);
@@ -209,7 +307,8 @@ const App = () => {
         // Check Firestore for existing profile
         const profileDoc = await getDoc(doc(db, 'profiles', user.uid));
         if (profileDoc.exists()) {
-          const profile = { ...profileDoc.data(), uid: user.uid };
+          const data = profileDoc.data();
+          const profile = { ...data, city: data.city || data.neighborhood || '', uid: user.uid };
           setUserProfile(profile);
           setEditForm(profile);
           setUserName(profile.nickname || displayName);
@@ -221,7 +320,9 @@ const App = () => {
             ageRange: '',
             gender: '',
             email: user.email || '',
-            neighborhood: '',
+            city: '',
+            latitude: null,
+            longitude: null,
             phone: '',
             bio: '',
             uid: user.uid
@@ -252,15 +353,30 @@ const App = () => {
     });
   }, [screen, activeTab, loggedIn]);
 
-  // Update request form neighborhood when profile changes or when opening new request form
+  // Update request form city when profile changes or when opening new request form
   React.useEffect(() => {
     if (screen === 'newRequest') {
       setRequestForm(prev => ({
         ...prev,
-        neighborhood: userProfile.neighborhood
+        city: userProfile.city,
+        latitude: userProfile.latitude,
+        longitude: userProfile.longitude,
       }));
     }
-  }, [screen, userProfile.neighborhood]);
+  }, [screen, userProfile.city]);
+
+  // Auto-locate on profile creation — only after legal acceptance is done
+  React.useEffect(() => {
+    if (needsProfileSetup && !needsLegalAcceptance) {
+      const timer = setTimeout(async () => {
+        const loc = await autoLocate();
+        if (loc) {
+          setEditForm(prev => ({ ...prev, city: loc.city, latitude: loc.latitude, longitude: loc.longitude }));
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [needsProfileSetup, needsLegalAcceptance]);
 
   const handleSaveProfile = async (e) => {
     if (e) e.preventDefault();
@@ -738,10 +854,12 @@ const App = () => {
     setAuthError('');
     try {
       await signInWithPopup(auth, googleProvider);
-      // onAuthStateChanged will handle setting loggedIn
     } catch (err) {
-      if (err.code !== 'auth/popup-closed-by-user') {
-        setAuthError('Google sign-in failed. Please try again.');
+      console.error('Google sign-in error:', err.code, err.message);
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+        // User closed it — no error to show
+      } else {
+        setAuthError(`Google sign-in failed: ${err.code || err.message}`);
       }
     }
   };
@@ -921,17 +1039,59 @@ const App = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Neighborhood *</label>
-                <select
-                  value={editForm.neighborhood}
-                  onChange={(e) => setEditForm({ ...editForm, neighborhood: e.target.value })}
-                  className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
-                >
-                  <option value="">Select your neighborhood</option>
-                  {SEATTLE_NEIGHBORHOODS.map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Location *</label>
+                {editForm.city && editForm.latitude ? (
+                  <div className="flex items-center gap-2 px-4 py-3 rounded-xl border-2 border-green-200 bg-green-50">
+                    <MapPin className="w-5 h-5 text-green-600" />
+                    <span className="font-medium text-green-800 flex-1">{editForm.city}</span>
+                    <button type="button" onClick={() => { setEditForm(prev => ({ ...prev, city: '', latitude: null, longitude: null })); setShowManualCityInput(false); }} className="text-xs text-slate-500 hover:text-slate-700 underline">Change</button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const loc = await autoLocate();
+                        if (loc) { setEditForm(prev => ({ ...prev, city: loc.city, latitude: loc.latitude, longitude: loc.longitude })); setShowManualCityInput(false); }
+                      }}
+                      disabled={geolocating}
+                      className="w-full py-3 px-4 rounded-xl border-2 border-rose-300 bg-gradient-to-r from-rose-50 to-orange-50 hover:from-rose-100 hover:to-orange-100 transition-all text-sm font-semibold text-rose-700 flex items-center justify-center gap-2"
+                    >
+                      <MapPin className="w-5 h-5" />
+                      {geolocating ? 'Detecting your location...' : 'Use my current location'}
+                    </button>
+                    {geoError && <p className="text-xs text-red-500">{geoError}</p>}
+                    {!showManualCityInput ? (
+                      <button type="button" onClick={() => setShowManualCityInput(true)} className="text-xs text-slate-500 hover:text-slate-700 underline mx-auto block">
+                        Or enter city manually
+                      </button>
+                    ) : (
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={editForm.city || ''}
+                          onChange={(e) => { setEditForm({ ...editForm, city: e.target.value, latitude: null, longitude: null }); searchCities(e.target.value); }}
+                          onFocus={() => citySuggestions.length > 0 && setShowCitySuggestions(true)}
+                          onBlur={() => setTimeout(() => setShowCitySuggestions(false), 200)}
+                          className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                          placeholder="Type your city name..."
+                          autoFocus
+                        />
+                        {showCitySuggestions && (
+                          <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border-2 border-slate-200 rounded-xl shadow-lg overflow-hidden">
+                            {citySuggestions.map((s, i) => (
+                              <button key={i} type="button" className="w-full text-left px-4 py-2.5 hover:bg-rose-50 transition-colors text-sm border-b border-slate-100 last:border-0"
+                                onMouseDown={() => { setEditForm(prev => ({ ...prev, city: s.city, latitude: s.latitude, longitude: s.longitude })); setShowCitySuggestions(false); setCitySuggestions([]); }}>
+                                <span className="font-medium text-slate-800">{s.city}</span>
+                                {(s.state || s.country) && <span className="text-slate-500 ml-1">{[s.state, s.country].filter(Boolean).join(', ')}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Phone Number *</label>
@@ -982,7 +1142,7 @@ const App = () => {
                     className="text-xl font-bold text-slate-800 cursor-pointer hover:underline decoration-dotted"
                     style={{ fontFamily: 'Georgia, serif' }}
                     onClick={() => {
-                      setViewingProfile({ nickname: selectedRequest.userName, initial: selectedRequest.userInitial, neighborhood: selectedRequest.neighborhood });
+                      setViewingProfile({ nickname: selectedRequest.userName, initial: selectedRequest.userInitial, city: selectedRequest.city || selectedRequest.neighborhood });
                       setScreen('viewProfile');
                     }}
                   >{selectedRequest.userName}</h2>
@@ -1032,7 +1192,7 @@ const App = () => {
                     <MapPin className="w-5 h-5 text-slate-500 mt-0.5" />
                     <div>
                       <p className="text-sm font-semibold text-slate-700">Location</p>
-                      <p className="text-slate-600">{selectedRequest.neighborhood}</p>
+                      <p className="text-slate-600">{selectedRequest.city || selectedRequest.neighborhood}</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
@@ -1210,7 +1370,7 @@ const App = () => {
                   <div className="space-y-2 text-sm">
                     <div className="flex items-start gap-2">
                       <MapPin className="w-4 h-4 text-slate-500 mt-0.5 flex-shrink-0" />
-                      <span className="text-slate-700">{selectedRequest.neighborhood}</span>
+                      <span className="text-slate-700">{selectedRequest.city || selectedRequest.neighborhood}</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <Clock className="w-4 h-4 text-slate-500 mt-0.5 flex-shrink-0" />
@@ -1588,7 +1748,9 @@ const App = () => {
                   setRequestForm({
                     title: '',
                     description: '',
-                    neighborhood: userProfile.neighborhood,
+                    city: userProfile.city,
+                    latitude: userProfile.latitude,
+                    longitude: userProfile.longitude,
                     category: '',
                     dateNeeded: '',
                     isDateRange: false,
@@ -1676,17 +1838,59 @@ const App = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Neighborhood *</label>
-                  <select
-                    value={requestForm.neighborhood}
-                    onChange={(e) => setRequestForm({ ...requestForm, neighborhood: e.target.value })}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
-                    required
-                  >
-                    {SEATTLE_NEIGHBORHOODS.map(n => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Location *</label>
+                  {requestForm.city && requestForm.latitude ? (
+                    <div className="flex items-center gap-2 px-4 py-3 rounded-xl border-2 border-green-200 bg-green-50">
+                      <MapPin className="w-5 h-5 text-green-600" />
+                      <span className="font-medium text-green-800 flex-1">{requestForm.city}</span>
+                      <button type="button" onClick={() => { setRequestForm(prev => ({ ...prev, city: '', latitude: null, longitude: null })); setShowManualCityInput(false); }} className="text-xs text-slate-500 hover:text-slate-700 underline">Change</button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const loc = await autoLocate();
+                          if (loc) { setRequestForm(prev => ({ ...prev, city: loc.city, latitude: loc.latitude, longitude: loc.longitude })); setShowManualCityInput(false); }
+                        }}
+                        disabled={geolocating}
+                        className="w-full py-3 px-4 rounded-xl border-2 border-rose-300 bg-gradient-to-r from-rose-50 to-orange-50 hover:from-rose-100 hover:to-orange-100 transition-all text-sm font-semibold text-rose-700 flex items-center justify-center gap-2"
+                      >
+                        <MapPin className="w-5 h-5" />
+                        {geolocating ? 'Detecting your location...' : 'Use my current location'}
+                      </button>
+                      {geoError && <p className="text-xs text-red-500">{geoError}</p>}
+                      {!showManualCityInput ? (
+                        <button type="button" onClick={() => setShowManualCityInput(true)} className="text-xs text-slate-500 hover:text-slate-700 underline mx-auto block">
+                          Or enter city manually
+                        </button>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={requestForm.city || ''}
+                            onChange={(e) => { setRequestForm({ ...requestForm, city: e.target.value, latitude: null, longitude: null }); searchCities(e.target.value); }}
+                            onFocus={() => citySuggestions.length > 0 && setShowCitySuggestions(true)}
+                            onBlur={() => setTimeout(() => setShowCitySuggestions(false), 200)}
+                            className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                            placeholder="Type your city name..."
+                            autoFocus
+                          />
+                          {showCitySuggestions && (
+                            <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border-2 border-slate-200 rounded-xl shadow-lg overflow-hidden">
+                              {citySuggestions.map((s, i) => (
+                                <button key={i} type="button" className="w-full text-left px-4 py-2.5 hover:bg-rose-50 transition-colors text-sm border-b border-slate-100 last:border-0"
+                                  onMouseDown={() => { setRequestForm(prev => ({ ...prev, city: s.city, latitude: s.latitude, longitude: s.longitude })); setShowCitySuggestions(false); setCitySuggestions([]); }}>
+                                  <span className="font-medium text-slate-800">{s.city}</span>
+                                  {(s.state || s.country) && <span className="text-slate-500 ml-1">{[s.state, s.country].filter(Boolean).join(', ')}</span>}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1829,18 +2033,59 @@ const App = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Neighborhood *</label>
-                  <select
-                    value={editForm.neighborhood}
-                    onChange={(e) => setEditForm({ ...editForm, neighborhood: e.target.value })}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
-                    required
-                  >
-                    <option value="">Select your neighborhood</option>
-                    {SEATTLE_NEIGHBORHOODS.map(n => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Location *</label>
+                  {editForm.city && editForm.latitude ? (
+                    <div className="flex items-center gap-2 px-4 py-3 rounded-xl border-2 border-green-200 bg-green-50">
+                      <MapPin className="w-5 h-5 text-green-600" />
+                      <span className="font-medium text-green-800 flex-1">{editForm.city}</span>
+                      <button type="button" onClick={() => { setEditForm(prev => ({ ...prev, city: '', latitude: null, longitude: null })); setShowManualCityInput(false); }} className="text-xs text-slate-500 hover:text-slate-700 underline">Change</button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const loc = await autoLocate();
+                          if (loc) { setEditForm(prev => ({ ...prev, city: loc.city, latitude: loc.latitude, longitude: loc.longitude })); setShowManualCityInput(false); }
+                        }}
+                        disabled={geolocating}
+                        className="w-full py-3 px-4 rounded-xl border-2 border-rose-300 bg-gradient-to-r from-rose-50 to-orange-50 hover:from-rose-100 hover:to-orange-100 transition-all text-sm font-semibold text-rose-700 flex items-center justify-center gap-2"
+                      >
+                        <MapPin className="w-5 h-5" />
+                        {geolocating ? 'Detecting your location...' : 'Use my current location'}
+                      </button>
+                      {geoError && <p className="text-xs text-red-500">{geoError}</p>}
+                      {!showManualCityInput ? (
+                        <button type="button" onClick={() => setShowManualCityInput(true)} className="text-xs text-slate-500 hover:text-slate-700 underline mx-auto block">
+                          Or enter city manually
+                        </button>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={editForm.city || ''}
+                            onChange={(e) => { setEditForm({ ...editForm, city: e.target.value, latitude: null, longitude: null }); searchCities(e.target.value); }}
+                            onFocus={() => citySuggestions.length > 0 && setShowCitySuggestions(true)}
+                            onBlur={() => setTimeout(() => setShowCitySuggestions(false), 200)}
+                            className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-rose-400 focus:outline-none transition-colors"
+                            placeholder="Type your city name..."
+                            autoFocus
+                          />
+                          {showCitySuggestions && (
+                            <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border-2 border-slate-200 rounded-xl shadow-lg overflow-hidden">
+                              {citySuggestions.map((s, i) => (
+                                <button key={i} type="button" className="w-full text-left px-4 py-2.5 hover:bg-rose-50 transition-colors text-sm border-b border-slate-100 last:border-0"
+                                  onMouseDown={() => { setEditForm(prev => ({ ...prev, city: s.city, latitude: s.latitude, longitude: s.longitude })); setShowCitySuggestions(false); setCitySuggestions([]); }}>
+                                  <span className="font-medium text-slate-800">{s.city}</span>
+                                  {(s.state || s.country) && <span className="text-slate-500 ml-1">{[s.state, s.country].filter(Boolean).join(', ')}</span>}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1891,10 +2136,10 @@ const App = () => {
                   <span className="text-4xl text-white font-bold">{viewingProfile.nickname[0].toUpperCase()}</span>
                 </div>
                 <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: 'Georgia, serif' }}>{viewingProfile.nickname}</h2>
-                {viewingProfile.neighborhood && (
+                {viewingProfile.city && (
                   <div className="flex items-center justify-center gap-2 mt-2">
                     <MapPin className="w-4 h-4 text-slate-500" />
-                    <span className="text-slate-600">{viewingProfile.neighborhood}</span>
+                    <span className="text-slate-600">{viewingProfile.city}</span>
                   </div>
                 )}
 
@@ -1966,7 +2211,7 @@ const App = () => {
                 <p className="text-slate-600">{userProfile.email}</p>
                 <div className="flex items-center justify-center gap-2 mt-2">
                   <MapPin className="w-4 h-4 text-slate-500" />
-                  <span className="text-slate-600">{userProfile.neighborhood}</span>
+                  <span className="text-slate-600">{userProfile.city || userProfile.neighborhood}</span>
                 </div>
                 {userProfile.bio && (
                   <p className="text-slate-600 text-sm mt-3 italic">"{userProfile.bio}"</p>
@@ -2204,6 +2449,20 @@ const App = () => {
                   New Request
                 </button>
               </div>
+              {userProfile.latitude && (
+                <div className="mb-4">
+                  <select
+                    value={feedDistanceFilter}
+                    onChange={(e) => setFeedDistanceFilter(e.target.value)}
+                    className="px-3 py-2 rounded-xl border-2 border-slate-200 text-sm focus:border-rose-400 focus:outline-none"
+                  >
+                    <option value="all">All locations</option>
+                    <option value="5">Within 5 miles</option>
+                    <option value="25">Within 25 miles</option>
+                    <option value="closest">Closest first</option>
+                  </select>
+                </div>
+              )}
             </>
           )}
 
@@ -2285,11 +2544,11 @@ const App = () => {
                         <div className="flex items-center gap-4 text-xs text-slate-500 mb-3">
                           <span className="flex items-center gap-1">
                             <MapPin className="w-3.5 h-3.5" />
-                            {request.neighborhood}
+                            {request.city || request.neighborhood}
                           </span>
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
-                            {request.isDateRange 
+                            {request.isDateRange
                               ? `${new Date(request.dateNeeded).toLocaleDateString()} - ${new Date(request.endDate).toLocaleDateString()}`
                               : new Date(request.dateNeeded).toLocaleDateString()}
                             {request.time && ` at ${request.time}`}
@@ -2330,7 +2589,7 @@ const App = () => {
                         <p className="text-slate-600 text-sm mb-2">Helped by: <span
                           className="font-semibold cursor-pointer hover:underline decoration-dotted"
                           onClick={() => {
-                            setViewingProfile({ nickname: request.acceptedBy, neighborhood: request.neighborhood });
+                            setViewingProfile({ nickname: request.acceptedBy, city: request.city || request.neighborhood });
                             setScreen('viewProfile');
                           }}
                         >{request.acceptedBy}</span></p>
@@ -2454,7 +2713,7 @@ const App = () => {
                                 className="font-semibold cursor-pointer hover:underline decoration-dotted"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setViewingProfile({ nickname: request.userName, initial: request.userInitial, neighborhood: request.neighborhood });
+                                  setViewingProfile({ nickname: request.userName, initial: request.userInitial, city: request.city || request.neighborhood });
                                   setScreen('viewProfile');
                                 }}
                               >{request.userName}</span>
@@ -2471,7 +2730,7 @@ const App = () => {
                         <div className="flex items-center gap-4 text-xs text-slate-500">
                           <span className="flex items-center gap-1">
                             <MapPin className="w-3.5 h-3.5" />
-                            {request.neighborhood}
+                            {request.city || request.neighborhood}
                           </span>
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
@@ -2508,7 +2767,7 @@ const App = () => {
                         <p className="text-slate-600 text-sm mb-2">Helped: <span
                           className="font-semibold cursor-pointer hover:underline decoration-dotted"
                           onClick={() => {
-                            setViewingProfile({ nickname: request.userName, initial: request.userInitial, neighborhood: request.neighborhood });
+                            setViewingProfile({ nickname: request.userName, initial: request.userInitial, city: request.city || request.neighborhood });
                             setScreen('viewProfile');
                           }}
                         >{request.userName}</span></p>
@@ -2556,17 +2815,38 @@ const App = () => {
             </div>
           )}
 
-          {activeTab === 'community' && (
+          {activeTab === 'community' && (() => {
+            let filteredCommunityRequests = postedRequests.filter(r => r.status !== 'accepted');
+            if (feedDistanceFilter !== 'all' && userProfile.latitude && userProfile.longitude) {
+              filteredCommunityRequests = filteredCommunityRequests.map(r => ({
+                ...r,
+                _distance: (r.latitude && r.longitude)
+                  ? haversineDistance(userProfile.latitude, userProfile.longitude, r.latitude, r.longitude)
+                  : null
+              }));
+              if (feedDistanceFilter === '5') {
+                filteredCommunityRequests = filteredCommunityRequests.filter(r => r._distance !== null && r._distance <= 5);
+              } else if (feedDistanceFilter === '25') {
+                filteredCommunityRequests = filteredCommunityRequests.filter(r => r._distance !== null && r._distance <= 25);
+              } else if (feedDistanceFilter === 'closest') {
+                filteredCommunityRequests.sort((a, b) => {
+                  if (a._distance === null) return 1;
+                  if (b._distance === null) return -1;
+                  return a._distance - b._distance;
+                });
+              }
+            }
+            return (
             <>
-              {postedRequests.filter(r => r.status !== 'accepted').length === 0 ? (
+              {filteredCommunityRequests.length === 0 ? (
                 <div className="bg-white rounded-2xl p-8 text-center shadow-sm">
                   <Users className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                  <p className="text-slate-500">No open requests right now</p>
+                  <p className="text-slate-500">{feedDistanceFilter !== 'all' ? 'No requests found within this distance' : 'No open requests right now'}</p>
                   <p className="text-slate-400 text-sm mt-2">Be the first to post a request or check back later!</p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {postedRequests.filter(r => r.status !== 'accepted').map(request => (
+                  {filteredCommunityRequests.map(request => (
                     <div 
                       key={request.id} 
                       onClick={() => {
@@ -2597,7 +2877,7 @@ const App = () => {
                         )}
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3.5 h-3.5" />
-                          {request.neighborhood}
+                          {request.city || request.neighborhood}{request._distance != null ? ` (${request._distance.toFixed(1)} mi)` : ''}
                         </span>
                         <span className="flex items-center gap-1">
                           <Clock className="w-3.5 h-3.5" />
@@ -2610,7 +2890,8 @@ const App = () => {
                 </div>
               )}
             </>
-          )}
+            );
+          })()}
 
           {/* Community Gives Section */}
           {activeTab === 'community' && (
