@@ -2457,27 +2457,6 @@ const App = () => {
                 </p>
               </div>
 
-              <div className="border-t border-slate-100 pt-5 space-y-3">
-                <h3 className="font-semibold text-slate-800 text-sm">Legal</h3>
-                <a href="/terms-of-service.html" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors">
-                  <span className="text-sm font-medium text-slate-700">Terms of Service</span>
-                  <span className="text-slate-400 text-sm">→</span>
-                </a>
-                <a href="/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors">
-                  <span className="text-sm font-medium text-slate-700">Privacy Policy</span>
-                  <span className="text-slate-400 text-sm">→</span>
-                </a>
-                <a href="/community-guidelines.html" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors">
-                  <span className="text-sm font-medium text-slate-700">Community Guidelines</span>
-                  <span className="text-slate-400 text-sm">→</span>
-                </a>
-                {userProfile.termsAcceptedAt && (
-                  <p className="text-xs text-slate-400 pt-1">
-                    Terms accepted on {new Date(userProfile.termsAcceptedAt.seconds ? userProfile.termsAcceptedAt.seconds * 1000 : userProfile.termsAcceptedAt).toLocaleDateString()}
-                  </p>
-                )}
-              </div>
-
               <div className="border-t border-slate-100 pt-5 mt-5 space-y-2">
                 <h3 className="font-semibold text-slate-800 text-sm">Contact</h3>
                 <p className="text-sm text-slate-600">support.igyapp@gmail.com</p>

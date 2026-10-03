@@ -74,19 +74,14 @@
     li { margin-bottom: 8px; }
     strong { color: #1e293b; }
     .mission {
-      background: #fffbeb;
-      border-left: 4px solid #f59e0b;
-      padding: 16px 20px;
-      border-radius: 0 12px 12px 0;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
       margin-bottom: 24px;
     }
-    .mission-label {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: #b45309;
-      margin-bottom: 4px;
+    .mission-icon {
+      flex-shrink: 0;
+      margin-top: 2px;
     }
     .mission p {
       color: #1e293b;
@@ -106,7 +101,17 @@
       <h1>Community Guidelines</h1>
 
       <div class="mission">
-        <p class="mission-label">Our Mission</p>
+        <span class="mission-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="url(#heartGrad)"/>
+            <defs>
+              <linearGradient id="heartGrad" x1="2" y1="3" x2="22" y2="21" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#fb7185"/>
+                <stop offset="1" stop-color="#fb923c"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </span>
         <p>IGY connects neighbors who want to help each other. These guidelines keep our community safe, respectful, and trustworthy.</p>
       </div>
 
