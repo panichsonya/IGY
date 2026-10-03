@@ -806,6 +806,8 @@ const App = () => {
         <span>·</span>
         <a href="/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-600 transition-colors">Privacy Policy</a>
         <span>·</span>
+        <a href="/community-guidelines.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-600 transition-colors">Community Guidelines</a>
+        <span>·</span>
         <button onClick={() => setScreen('about')} className="hover:text-slate-600 transition-colors">About</button>
         <span>·</span>
         <span>&copy; 2026 IGY</span>
@@ -2360,6 +2362,10 @@ const App = () => {
                 </a>
                 <a href="/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors">
                   <span className="text-sm font-medium text-slate-700">Privacy Policy</span>
+                  <span className="text-slate-400 text-sm">→</span>
+                </a>
+                <a href="/community-guidelines.html" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors">
+                  <span className="text-sm font-medium text-slate-700">Community Guidelines</span>
                   <span className="text-slate-400 text-sm">→</span>
                 </a>
                 {userProfile.termsAcceptedAt && (
