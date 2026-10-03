@@ -25,19 +25,24 @@ const App = () => {
   const [loggedIn, setLoggedIn] = useState(false);
   const [userName, setUserName] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
+  const [showIgyMenu, setShowIgyMenu] = useState(false);
   const dropdownRef = useRef(null);
+  const igyMenuRef = useRef(null);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
         setShowDropdown(false);
       }
+      if (igyMenuRef.current && !igyMenuRef.current.contains(e.target)) {
+        setShowIgyMenu(false);
+      }
     };
-    if (showDropdown) {
+    if (showDropdown || showIgyMenu) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showDropdown]);
+  }, [showDropdown, showIgyMenu]);
 
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -794,17 +799,57 @@ const App = () => {
               ←
             </button>
           ) : null}
-          <div 
-            onClick={() => setScreen('main')}
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-          >
-            <div className="w-10 h-10 bg-gradient-to-br from-rose-400 to-orange-400 rounded-2xl flex items-center justify-center" style={{transform: 'rotate(3deg)'}}>
-              <Heart className="w-5 h-5 text-white" fill="white" />
-            </div>
-            <div>
+          <div className="relative" ref={igyMenuRef}>
+            <button
+              onClick={() => setShowIgyMenu(!showIgyMenu)}
+              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity bg-transparent border-none p-0"
+            >
+              <div className="w-10 h-10 bg-gradient-to-br from-rose-400 to-orange-400 rounded-2xl flex items-center justify-center" style={{transform: 'rotate(3deg)'}}>
+                <Heart className="w-5 h-5 text-white" fill="white" />
+              </div>
               <h1 className="text-xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>IGY</h1>
-              <p className="text-xs text-slate-500">Seattle</p>
-            </div>
+            </button>
+
+            {showIgyMenu && (
+              <div className="absolute left-0 mt-2 w-52 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50">
+                <button
+                  onClick={() => { setScreen('main'); setShowIgyMenu(false); }}
+                  className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors text-slate-700 text-sm"
+                >
+                  Home
+                </button>
+                <button
+                  onClick={() => { setScreen('about'); setShowIgyMenu(false); }}
+                  className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors text-slate-700 text-sm"
+                >
+                  About IGY
+                </button>
+                <a
+                  href="/community-guidelines.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors text-slate-700 text-sm"
+                >
+                  Community Guidelines
+                </a>
+                <a
+                  href="/terms-of-service.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors text-slate-700 text-sm"
+                >
+                  Terms of Service
+                </a>
+                <a
+                  href="/privacy-policy.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors text-slate-700 text-sm"
+                >
+                  Privacy Policy
+                </a>
+              </div>
+            )}
           </div>
         </div>
         <div className="relative" ref={dropdownRef}>
