@@ -3,7 +3,7 @@ import { Heart, MapPin, Clock, Send, Users, Star, Check, AlertCircle } from 'luc
 import Cropper from 'react-easy-crop';
 import { auth, googleProvider, db } from './firebase';
 import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
-import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot, getDoc, setDoc, orderBy, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot, getDoc, setDoc, orderBy, serverTimestamp, Timestamp, getDocs } from 'firebase/firestore';
 
 // Haversine formula: returns distance in miles between two lat/lng pairs
 const haversineDistance = (lat1, lon1, lat2, lon2) => {
@@ -118,6 +118,12 @@ const App = () => {
   const [giveForm, setGiveForm] = useState({ title: '', content: '', imageUrl: '' });
   const [editingGiveId, setEditingGiveId] = useState(null);
   const [lightboxImage, setLightboxImage] = useState(null);
+
+  // Comments on community gives
+  const [giveComments, setGiveComments] = useState({});
+  const [commentInputs, setCommentInputs] = useState({});
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [expandedComments, setExpandedComments] = useState({});
 
   // Image cropper state
   const [cropImageSrc, setCropImageSrc] = useState(null);
@@ -277,10 +283,28 @@ const App = () => {
       mergeCompleted();
     });
 
-    // Listen to community gives
+    // Listen to community gives and their comments
+    const commentUnsubs = [];
     const givesQuery = query(collection(db, 'communityGives'), orderBy('postedAt', 'desc'));
     const unsubGives = onSnapshot(givesQuery, (snapshot) => {
       setCommunityGives(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      // Clean up old comment listeners
+      commentUnsubs.forEach(unsub => unsub());
+      commentUnsubs.length = 0;
+      // Set up comment listeners for each give
+      snapshot.docs.forEach(giveDoc => {
+        const commentsQuery = query(
+          collection(db, 'communityGives', giveDoc.id, 'comments'),
+          orderBy('postedAt', 'asc')
+        );
+        const unsubComment = onSnapshot(commentsQuery, (commentSnap) => {
+          setGiveComments(prev => ({
+            ...prev,
+            [giveDoc.id]: commentSnap.docs.map(c => ({ id: c.id, ...c.data() }))
+          }));
+        });
+        commentUnsubs.push(unsubComment);
+      });
     });
 
     // Listen to reviews
@@ -305,6 +329,7 @@ const App = () => {
       unsubCompleted1();
       unsubCompleted2();
       unsubGives();
+      commentUnsubs.forEach(unsub => unsub());
       unsubReviews();
       unsubNotifs();
       unsubPending();
@@ -592,6 +617,25 @@ const App = () => {
       }
     } catch (err) {
       alert('Failed to save: ' + err.message);
+    }
+  };
+
+  const handleAddComment = async (giveId, parentCommentId = null) => {
+    const inputKey = parentCommentId ? `reply-${parentCommentId}` : `comment-${giveId}`;
+    const text = (commentInputs[inputKey] || '').trim();
+    if (!text) return;
+    try {
+      await addDoc(collection(db, 'communityGives', giveId, 'comments'), {
+        text,
+        userName: userProfile.nickname,
+        userInitial: (userProfile.nickname || '?')[0].toUpperCase(),
+        parentCommentId: parentCommentId || null,
+        postedAt: new Date().toISOString()
+      });
+      setCommentInputs(prev => ({ ...prev, [inputKey]: '' }));
+      setReplyingTo(null);
+    } catch (err) {
+      alert('Failed to post comment: ' + err.message);
     }
   };
 
@@ -2970,6 +3014,120 @@ const App = () => {
                       )}
                       <h4 className="font-semibold text-slate-800 mb-1">{give.title}</h4>
                       <p className="text-slate-600 text-sm whitespace-pre-line mb-2">{give.content}</p>
+
+                      {/* Comments Section */}
+                      {(() => {
+                        const comments = giveComments[give.id] || [];
+                        const topLevel = comments.filter(c => !c.parentCommentId);
+                        const getReplies = (parentId) => comments.filter(c => c.parentCommentId === parentId);
+                        const isExpanded = expandedComments[give.id];
+                        const commentCount = comments.length;
+
+                        return (
+                          <div className="border-t border-slate-100 pt-2 mt-2">
+                            <button
+                              onClick={() => setExpandedComments(prev => ({ ...prev, [give.id]: !prev[give.id] }))}
+                              className="text-xs text-slate-400 hover:text-slate-600 font-medium mb-2"
+                            >
+                              {commentCount === 0 ? 'Add a comment' : `${commentCount} comment${commentCount !== 1 ? 's' : ''}`}
+                            </button>
+
+                            {isExpanded && (
+                              <div className="space-y-3">
+                                {topLevel.map(comment => (
+                                  <div key={comment.id}>
+                                    {/* Top-level comment */}
+                                    <div className="flex gap-2">
+                                      <div className="w-7 h-7 bg-gradient-to-br from-slate-300 to-slate-400 rounded-full flex items-center justify-center flex-shrink-0">
+                                        <span className="text-white font-bold text-xs">{comment.userInitial}</span>
+                                      </div>
+                                      <div className="flex-1">
+                                        <div className="bg-slate-50 rounded-xl px-3 py-2">
+                                          <p className="text-xs font-semibold text-slate-700">{comment.userName}</p>
+                                          <p className="text-sm text-slate-600">{comment.text}</p>
+                                        </div>
+                                        <div className="flex items-center gap-3 mt-1 ml-1">
+                                          <span className="text-xs text-slate-400">{new Date(comment.postedAt).toLocaleDateString()}</span>
+                                          <button
+                                            onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}
+                                            className="text-xs text-slate-400 hover:text-slate-600 font-medium"
+                                          >
+                                            Reply
+                                          </button>
+                                        </div>
+
+                                        {/* Replies */}
+                                        {getReplies(comment.id).map(reply => (
+                                          <div key={reply.id} className="flex gap-2 mt-2 ml-2">
+                                            <div className="w-6 h-6 bg-gradient-to-br from-slate-300 to-slate-400 rounded-full flex items-center justify-center flex-shrink-0">
+                                              <span className="text-white font-bold" style={{ fontSize: '10px' }}>{reply.userInitial}</span>
+                                            </div>
+                                            <div className="flex-1">
+                                              <div className="bg-slate-50 rounded-xl px-3 py-2">
+                                                <p className="text-xs font-semibold text-slate-700">{reply.userName}</p>
+                                                <p className="text-sm text-slate-600">{reply.text}</p>
+                                              </div>
+                                              <span className="text-xs text-slate-400 ml-1">{new Date(reply.postedAt).toLocaleDateString()}</span>
+                                            </div>
+                                          </div>
+                                        ))}
+
+                                        {/* Reply input */}
+                                        {replyingTo === comment.id && (
+                                          <div className="flex gap-2 mt-2 ml-2">
+                                            <div className="w-6 h-6 bg-gradient-to-br from-green-400 to-emerald-400 rounded-full flex items-center justify-center flex-shrink-0">
+                                              <span className="text-white font-bold" style={{ fontSize: '10px' }}>{(userProfile.nickname || '?')[0].toUpperCase()}</span>
+                                            </div>
+                                            <div className="flex-1 flex gap-1">
+                                              <input
+                                                type="text"
+                                                value={commentInputs[`reply-${comment.id}`] || ''}
+                                                onChange={(e) => setCommentInputs(prev => ({ ...prev, [`reply-${comment.id}`]: e.target.value }))}
+                                                onKeyDown={(e) => e.key === 'Enter' && handleAddComment(give.id, comment.id)}
+                                                placeholder="Write a reply..."
+                                                className="flex-1 text-sm border border-slate-200 rounded-full px-3 py-1.5 focus:outline-none focus:border-green-400"
+                                              />
+                                              <button
+                                                onClick={() => handleAddComment(give.id, comment.id)}
+                                                className="text-green-500 hover:text-green-600 p-1"
+                                              >
+                                                <Send className="w-4 h-4" />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+
+                                {/* Add comment input */}
+                                <div className="flex gap-2 pt-1">
+                                  <div className="w-7 h-7 bg-gradient-to-br from-green-400 to-emerald-400 rounded-full flex items-center justify-center flex-shrink-0">
+                                    <span className="text-white font-bold text-xs">{(userProfile.nickname || '?')[0].toUpperCase()}</span>
+                                  </div>
+                                  <div className="flex-1 flex gap-1">
+                                    <input
+                                      type="text"
+                                      value={commentInputs[`comment-${give.id}`] || ''}
+                                      onChange={(e) => setCommentInputs(prev => ({ ...prev, [`comment-${give.id}`]: e.target.value }))}
+                                      onKeyDown={(e) => e.key === 'Enter' && handleAddComment(give.id)}
+                                      placeholder="Write a comment..."
+                                      className="flex-1 text-sm border border-slate-200 rounded-full px-3 py-1.5 focus:outline-none focus:border-green-400"
+                                    />
+                                    <button
+                                      onClick={() => handleAddComment(give.id)}
+                                      className="text-green-500 hover:text-green-600 p-1"
+                                    >
+                                      <Send className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>
