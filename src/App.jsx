@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Heart, MapPin, Clock, Send, Users, Star, Check, AlertCircle } from 'lucide-react';
 import Cropper from 'react-easy-crop';
 import { auth, googleProvider, db } from './firebase';
@@ -25,6 +25,20 @@ const App = () => {
   const [loggedIn, setLoggedIn] = useState(false);
   const [userName, setUserName] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    };
+    if (showDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showDropdown]);
+
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
@@ -749,8 +763,8 @@ const App = () => {
             </div>
           </div>
         </div>
-        <div className="relative">
-          <button 
+        <div className="relative" ref={dropdownRef}>
+          <button
             onClick={() => setShowDropdown(!showDropdown)}
             className="flex items-center gap-2"
           >
