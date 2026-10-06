@@ -62,7 +62,7 @@ const App = () => {
   const [showAcceptModal, setShowAcceptModal] = useState(false);
   const [hasReachedOut, setHasReachedOut] = useState(false);
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false);
-  const [showProfileSaved, setShowProfileSaved] = useState(false);
+  const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' | 'info' }
 
   // Notification state
   const [notifications, setNotifications] = useState([]);
@@ -423,6 +423,11 @@ const App = () => {
     }
   }, [needsProfileSetup, needsLegalAcceptance]);
 
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   const handleSaveProfile = async (e) => {
     if (e) e.preventDefault();
     setUserProfile(editForm);
@@ -435,8 +440,7 @@ const App = () => {
       setScreen('main');
     } else {
       setScreen('profile');
-      setShowProfileSaved(true);
-      setTimeout(() => setShowProfileSaved(false), 2500);
+      showToast('Profile updated successfully!', 'success');
     }
   };
 
@@ -596,7 +600,7 @@ const App = () => {
 
   const handleCreateGive = async () => {
     if (!giveForm.title || !giveForm.content) {
-      alert('Please add a title and something to share');
+      showToast('Please add a title and something to share', 'error');
       return;
     }
 
@@ -610,7 +614,7 @@ const App = () => {
         setEditingGiveId(null);
       } else {
       if (hasGivenToday) {
-        alert('You can only share one positivity post per day. Come back tomorrow!');
+        showToast('You can only share one positivity post per day. Come back tomorrow!', 'info');
         return;
       }
       await addDoc(collection(db, 'communityGives'), {
@@ -632,7 +636,7 @@ const App = () => {
         setActiveTab('community');
       }
     } catch (err) {
-      alert('Failed to save: ' + err.message);
+      showToast('Failed to save: ' + err.message, 'error');
     }
   };
 
@@ -663,18 +667,18 @@ const App = () => {
       setCommentInputs(prev => ({ ...prev, [inputKey]: '' }));
       setReplyingTo(null);
     } catch (err) {
-      alert('Failed to post comment: ' + err.message);
+      showToast('Failed to post comment: ' + err.message, 'error');
     }
   };
 
   const handleCreateRequest = async () => {
     if (!requestForm.title || !requestForm.description || !requestForm.dateNeeded || !requestForm.category) {
-      alert('Please fill in all required fields');
+      showToast('Please fill in all required fields', 'error');
       return;
     }
 
     if (requestForm.isDateRange && !requestForm.endDate) {
-      alert('Please provide an end date for the date range');
+      showToast('Please provide an end date for the date range', 'error');
       return;
     }
 
@@ -695,7 +699,7 @@ const App = () => {
   const handleConfirmAccept = async () => {
     if (helpingRequests.some(r => r.id === selectedRequest.id)) {
       setShowAcceptModal(false);
-      alert('You have already accepted this request!');
+      showToast('You have already accepted this request!', 'info');
       return;
     }
 
@@ -750,7 +754,7 @@ const App = () => {
       if (freshData.requesterConfirmed) {
         moveToCompleted(updatedRequest);
       } else {
-        alert(`Marked as complete! Waiting for ${selectedRequest.userName} to confirm.`);
+        showToast(`Marked as complete! Waiting for ${selectedRequest.userName} to confirm.`, 'success');
         setScreen('main');
         setActiveTab('myActivity');
       }
@@ -762,7 +766,7 @@ const App = () => {
       if (freshData.helperConfirmed) {
         moveToCompleted(updatedRequest);
       } else {
-        alert(`Marked as complete! Waiting for ${selectedRequest.acceptedBy} to confirm.`);
+        showToast(`Marked as complete! Waiting for ${selectedRequest.acceptedBy} to confirm.`, 'success');
         setScreen('main');
         setActiveTab('myActivity');
       }
@@ -823,6 +827,40 @@ const App = () => {
 
   // Reusable Header Component
   const Header = ({ showBackButton = false, onBack = null }) => (
+    <>
+    {toast && (
+      <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-[100] max-w-sm w-full px-4">
+        <div className={`rounded-2xl shadow-xl border px-5 py-4 flex items-center gap-3 ${
+          toast.type === 'error' ? 'bg-red-50 border-red-200' :
+          toast.type === 'success' ? 'bg-green-50 border-green-200' :
+          'bg-blue-50 border-blue-200'
+        }`}>
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+            toast.type === 'error' ? 'bg-red-100' :
+            toast.type === 'success' ? 'bg-green-100' :
+            'bg-blue-100'
+          }`}>
+            {toast.type === 'error' ? (
+              <AlertCircle className="w-5 h-5 text-red-600" />
+            ) : toast.type === 'success' ? (
+              <Check className="w-5 h-5 text-green-600" />
+            ) : (
+              <AlertCircle className="w-5 h-5 text-blue-600" />
+            )}
+          </div>
+          <p className={`text-sm font-medium flex-1 ${
+            toast.type === 'error' ? 'text-red-800' :
+            toast.type === 'success' ? 'text-green-800' :
+            'text-blue-800'
+          }`}>{toast.message}</p>
+          <button onClick={() => setToast(null)} className={`text-lg font-bold flex-shrink-0 ${
+            toast.type === 'error' ? 'text-red-300 hover:text-red-500' :
+            toast.type === 'success' ? 'text-green-300 hover:text-green-500' :
+            'text-blue-300 hover:text-blue-500'
+          }`}>✕</button>
+        </div>
+      </div>
+    )}
     <div className="bg-white shadow-sm border-b border-slate-200 sticky top-0 z-50">
       <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -935,6 +973,7 @@ const App = () => {
         </div>
       </div>
     </div>
+    </>
   );
 
   const Footer = () => (
@@ -1784,7 +1823,7 @@ const App = () => {
                             const file = e.target.files[0];
                             if (!file) return;
                             if (file.size > 5 * 1024 * 1024) {
-                              alert('Image must be under 5MB');
+                              showToast('Image must be under 5MB', 'error');
                               return;
                             }
                             const reader = new FileReader();
@@ -2340,14 +2379,6 @@ const App = () => {
         <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
           <Header showBackButton={true} onBack={() => setScreen('main')} />
 
-          {showProfileSaved && (
-            <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 bg-white rounded-2xl shadow-xl border border-green-200 px-6 py-4 flex items-center gap-3 animate-fade-in">
-              <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-                <Check className="w-5 h-5 text-green-600" />
-              </div>
-              <p className="text-sm font-semibold text-slate-700">Profile updated successfully!</p>
-            </div>
-          )}
 
           <div className="max-w-2xl mx-auto px-4 py-6">
             <div className="bg-white rounded-3xl shadow-xl p-6 mb-4">
