@@ -62,6 +62,7 @@ const App = () => {
   const [showAcceptModal, setShowAcceptModal] = useState(false);
   const [hasReachedOut, setHasReachedOut] = useState(false);
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false);
+  const [showProfileSaved, setShowProfileSaved] = useState(false);
 
   // Notification state
   const [notifications, setNotifications] = useState([]);
@@ -434,7 +435,8 @@ const App = () => {
       setScreen('main');
     } else {
       setScreen('profile');
-      alert('Profile updated successfully!');
+      setShowProfileSaved(true);
+      setTimeout(() => setShowProfileSaved(false), 2500);
     }
   };
 
@@ -2337,6 +2339,15 @@ const App = () => {
       return (
         <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-orange-50">
           <Header showBackButton={true} onBack={() => setScreen('main')} />
+
+          {showProfileSaved && (
+            <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 bg-white rounded-2xl shadow-xl border border-green-200 px-6 py-4 flex items-center gap-3 animate-fade-in">
+              <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                <Check className="w-5 h-5 text-green-600" />
+              </div>
+              <p className="text-sm font-semibold text-slate-700">Profile updated successfully!</p>
+            </div>
+          )}
 
           <div className="max-w-2xl mx-auto px-4 py-6">
             <div className="bg-white rounded-3xl shadow-xl p-6 mb-4">
