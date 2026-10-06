@@ -501,6 +501,15 @@ const App = () => {
       createdAt: new Date().toISOString()
     });
 
+    // Notify the reviewee
+    await addDoc(collection(db, 'notifications'), {
+      userId: reviewTarget.revieweeName,
+      type: 'review',
+      message: `${reviewTarget.reviewerName} left you a ${reviewStars}-star review`,
+      createdAt: new Date().toISOString(),
+      read: false
+    });
+
     // Remove from pending reviews in Firestore
     const myPending = pendingReviews.filter(p => p.requestId === reviewTarget.requestId);
     for (const p of myPending) {
@@ -637,6 +646,18 @@ const App = () => {
         parentCommentId: parentCommentId || null,
         postedAt: new Date().toISOString()
       });
+      // Notify the post author (if it's not the commenter themselves)
+      const give = communityGives.find(g => g.id === giveId);
+      if (give && give.userName !== userProfile.nickname) {
+        await addDoc(collection(db, 'notifications'), {
+          userId: give.userName,
+          type: 'comment',
+          message: `${userProfile.nickname} commented on your post "${give.title}"`,
+          giveId: giveId,
+          createdAt: new Date().toISOString(),
+          read: false
+        });
+      }
       setCommentInputs(prev => ({ ...prev, [inputKey]: '' }));
       setReplyingTo(null);
     } catch (err) {
@@ -767,6 +788,18 @@ const App = () => {
       role: myRole,
       createdAt: new Date().toISOString()
     });
+
+    // Notify the other user that the request is completed
+    if (otherUser) {
+      await addDoc(collection(db, 'notifications'), {
+        userId: otherUser,
+        type: 'completed',
+        message: `"${request.title}" has been marked as completed`,
+        requestId: request.id,
+        createdAt: new Date().toISOString(),
+        read: false
+      });
+    }
 
     if (otherUser) {
       const otherRole = myRole === 'helper' ? 'requester' : 'helper';
@@ -2388,6 +2421,62 @@ const App = () => {
               </button>
             </div>
 
+            {/* Notification Settings */}
+            <div className="bg-white rounded-3xl shadow-xl p-6 mb-4">
+              <h3 className="font-bold text-slate-800 text-lg mb-4" style={{ fontFamily: 'Georgia, serif' }}>Notification Settings</h3>
+              <div className="space-y-4">
+                <p className="text-xs text-slate-400 uppercase font-semibold tracking-wide">Always On</p>
+                {[
+                  { label: 'Request accepted', desc: 'When someone accepts your request' },
+                  { label: 'Request completed', desc: 'When a request is marked complete' },
+                  { label: 'Review received', desc: 'When someone leaves you a review' },
+                  { label: 'Reciprocity reminder', desc: 'When it\'s time to give back' },
+                ].map(item => (
+                  <div key={item.label} className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">{item.label}</p>
+                      <p className="text-xs text-slate-400">{item.desc}</p>
+                    </div>
+                    <div className="w-11 h-6 bg-green-400 rounded-full flex items-center justify-end px-0.5 opacity-60 cursor-not-allowed">
+                      <div className="w-5 h-5 bg-white rounded-full shadow"></div>
+                    </div>
+                  </div>
+                ))}
+
+                <div className="border-t border-slate-100 pt-4 mt-4">
+                  <p className="text-xs text-slate-400 uppercase font-semibold tracking-wide mb-4">Optional</p>
+                  {[
+                    { key: 'comments', label: 'Comments on your posts', desc: 'When someone comments on your community give' },
+                    { key: 'neighborhoodRequests', label: 'New requests nearby', desc: 'When new requests are posted in your area' },
+                  ].map(item => {
+                    const settings = userProfile.notificationSettings || {};
+                    const isOn = settings[item.key] !== false;
+                    return (
+                      <div key={item.key} className="flex items-center justify-between mb-4">
+                        <div>
+                          <p className="text-sm font-medium text-slate-700">{item.label}</p>
+                          <p className="text-xs text-slate-400">{item.desc}</p>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            const newSettings = { ...settings, [item.key]: !isOn };
+                            const updatedProfile = { ...userProfile, notificationSettings: newSettings };
+                            setUserProfile(updatedProfile);
+                            if (firebaseUser) {
+                              await updateDoc(doc(db, 'profiles', firebaseUser.uid), { notificationSettings: newSettings });
+                            }
+                          }}
+                          className={`w-11 h-6 rounded-full flex items-center px-0.5 transition-colors ${isOn ? 'bg-green-400 justify-end' : 'bg-slate-300 justify-start'}`}
+                        >
+                          <div className="w-5 h-5 bg-white rounded-full shadow"></div>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
             {/* Reviews Section */}
             <div className="bg-white rounded-3xl shadow-xl p-6">
               <h3 className="font-bold text-slate-800 text-lg mb-4" style={{ fontFamily: 'Georgia, serif' }}>Reviews</h3>
@@ -2477,9 +2566,21 @@ const App = () => {
 
         <div className="max-w-2xl mx-auto px-4 py-6">
           {/* Notifications */}
-          {notifications.filter(n => !n.read).length > 0 && (
+          {notifications.filter(n => {
+            if (n.read) return false;
+            const settings = userProfile.notificationSettings || {};
+            if (n.type === 'comment' && settings.comments === false) return false;
+            if (n.type === 'neighborhoodRequest' && settings.neighborhoodRequests === false) return false;
+            return true;
+          }).length > 0 && (
             <div className="space-y-2 mb-4">
-              {notifications.filter(n => !n.read).map(notif => (
+              {notifications.filter(n => {
+                if (n.read) return false;
+                const settings = userProfile.notificationSettings || {};
+                if (n.type === 'comment' && settings.comments === false) return false;
+                if (n.type === 'neighborhoodRequest' && settings.neighborhoodRequests === false) return false;
+                return true;
+              }).map(notif => (
                 <div key={notif.id} className="bg-green-50 rounded-2xl p-4 border-2 border-green-200 flex items-start justify-between gap-3">
                   <div className="flex-1">
                     <p className="text-sm font-semibold text-green-800">🎉 {notif.message}</p>
